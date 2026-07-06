@@ -1,0 +1,52 @@
+[project]
+name = "home-control"
+version = "0.1.0"
+description = "Unified curses TUI to control home devices (Hue, Roku, Sonos, router, Yoto, Midea)"
+requires-python = ">=3.10"
+dependencies = [
+    # Hue: vendored phue2 lib lives in standalone-apps/hue/phue2-0.0.4; install with
+    #   pip install -e ../standalone-apps/hue/phue2-0.0.4
+    # or rely on PYTHONPATH. httpx is needed for Hue v2 effects.
+    "httpx>=0.27",
+    # Sonos
+    "soco>=0.30",
+    "ytmusicapi>=1.7",
+    # Voice control: NLU via the Claude API (tool-calling).
+    "anthropic>=0.40",
+    # Midea AC: local-LAN control via msmart-ng (import name `msmart`).
+    "msmart-ng>=2026.7.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pyright", "pytest"]
+
+[project.scripts]
+home-control = "home_control.app:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["home_control"]
+
+[tool.pyright]
+include = ["home_control"]
+# Resolve imports from the project venv (anthropic, soco, httpx, ...).
+venvPath = "."
+venv = ".venv"
+# phue2 is installed editable from the vendored source tree; point pyright there.
+extraPaths = ["standalone-apps/hue/phue2-0.0.4/src"]
+pythonVersion = "3.11"  # tomllib (config.py) is stdlib from 3.11
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+useLibraryCodeForTypes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I", "UP"]
