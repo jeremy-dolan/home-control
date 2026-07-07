@@ -380,7 +380,7 @@ def _empty_chart(width: int, height: int, *, down_color: str, up_color: str,
                  down_text: str, up_text: str) -> list[Line]:
     """Stacked-chart placeholder (same footprint) for before enough samples exist: a
     blank title-overlay row, the two 0 baselines, and the readouts near each chart's
-    top. (The "collecting throughput…" hint is drawn on the title line by the caller.)"""
+    top. (The "collecting throughput..." hint is drawn on the title line by the caller.)"""
     height = max(4, height)
     dph, uph, d_base, u_base, labels, lw, plot_w = _stack_geometry(width, height)
     grid: list[list[_Cell]] = [[(" ", "")] * plot_w for _ in range(height)]
@@ -1190,7 +1190,7 @@ class RouterSystem(System):
     def collapsed_lines(self, width: int) -> list[Line]:
         s = self.ctl.snapshot()
         if not s.online and not s.connected:
-            return [[Seg(s.error or "checking connection…", dim=True)]]
+            return [[Seg(s.error or "checking connection...", dim=True)]]
         badge = "● ONLINE" if s.online else "● OFFLINE"
         color = "green" if s.online else "red"
         # Order mirrors the expanded view: WAN IP · latency · throughput · devices.
@@ -1285,7 +1285,7 @@ class RouterSystem(System):
             region.segs(y, chart[0], pad)
             region.text(y, 0, "Throughput", self.color, bold=True)
             if collecting:
-                region.text(y, 13, "collecting throughput…", dim=True)
+                region.text(y, 13, "collecting throughput...", dim=True)
             for i, line in enumerate(chart[1:], start=1):
                 region.segs(y + i, line, pad)
             return y + len(chart) + 1  # trailing blank
@@ -1308,7 +1308,7 @@ class RouterSystem(System):
         hdr: Line = [Seg(f"Devices on LAN ({len(s.devices)})", self.color, bold=True),
                      Seg(via, dim=True)]
         if s.scanning:
-            hdr.append(Seg("  refreshing…", dim=True))
+            hdr.append(Seg("  refreshing...", dim=True))
         region.segs(y, hdr)
         y += 1
         visible = h - y
@@ -1316,7 +1316,7 @@ class RouterSystem(System):
             return
         dev = s.devices
         if not dev:
-            region.text(y, 1, "refreshing…" if s.scanning else "no devices found", dim=True)
+            region.text(y, 1, "refreshing..." if s.scanning else "no devices found", dim=True)
             return
         overflow = len(dev) > visible
         rows = visible - 1 if overflow else visible  # reserve a line for the position hint
@@ -1373,6 +1373,6 @@ class RouterSystem(System):
             # the device list only auto-refreshes on a slow cadence, so 'r' just
             # forces an immediate device lookup.
             self.ctl.scan()
-            self.set_status("Refreshing devices…")
+            self.set_status("Refreshing devices...")
             return True
         return False

@@ -67,14 +67,14 @@ def _wrap_message(text: str, width: int, max_lines: int) -> list[str]:
 
     Splits on existing newlines first (so paragraph/bullet breaks from the
     model's reply are preserved) then word-wraps each paragraph to ``width``.
-    Truncates to ``max_lines`` with a trailing "…" so a long reply can never
+    Truncates to ``max_lines`` with a trailing "..." so a long reply can never
     push the box past the screen or smear text across other rows.
     """
     lines: list[str] = []
     for para in text.split("\n"):
         lines.extend(textwrap.wrap(para, width=width) if para.strip() else [""])
     if len(lines) > max_lines:
-        lines = lines[: max_lines - 1] + ["…"]
+        lines = lines[: max_lines - 1] + ["..."]
     return lines or ["Done."]
 
 

@@ -267,7 +267,7 @@ class HueController:
             self.error = ""
             return True
         except PhueRegistrationException:
-            self.error = "Press the bridge link button, then wait…"
+            self.error = "Press the bridge link button, then wait..."
             return False
         except Exception as e:  # noqa: BLE001
             self.error = str(e)
@@ -862,7 +862,7 @@ class HueSystem(System):
     # -- collapsed ---------------------------------------------------------
     def collapsed_lines(self, width: int) -> list[Line]:
         if not self.ctl.connected:
-            msg = self.ctl.error or "connecting…"
+            msg = self.ctl.error or "connecting..."
             return [[Seg(f"{self.ctl.ip}: {msg}", dim=True)]]
         # Badge mirrors the Router's "● ONLINE": bold accent colour on the left.
         badge = "● CONNECTED"
@@ -891,7 +891,7 @@ class HueSystem(System):
                 region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "red", bold=True)
                 region.text(1, 0, self.ctl.error, dim=True)
             else:
-                region.text(0, 0, f"Connecting to {self.ctl.ip}…", dim=True)
+                region.text(0, 0, f"Connecting to {self.ctl.ip}...", dim=True)
             return
 
         region.segs(0, self.collapsed_lines(region.width)[0])

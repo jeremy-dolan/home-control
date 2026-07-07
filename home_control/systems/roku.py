@@ -35,7 +35,7 @@ ECP_PORT = 8060
 HTTP_TIMEOUT = 2  # seconds
 # The initial device-info probe gets a longer leash: a Roku waking from standby
 # can take several seconds to answer its first ECP request, and if every connect
-# attempt timed out at 2s we'd never get past "Connecting…".
+# attempt timed out at 2s we'd never get past "Connecting...".
 CONNECT_TIMEOUT = 5  # seconds
 # Consecutive failed refreshes tolerated before we consider the device gone. A
 # single missed poll is almost always a transient blip, not a disconnect — don't
@@ -128,13 +128,13 @@ class RokuController:
     def _connect(self) -> bool:
         if not self.ip:
             # No IP yet → still searching. Leave the error empty; the panel shows
-            # "Discovering…" while self.ip is None (see RokuSystem._status).
+            # "Discovering..." while self.ip is None (see RokuSystem._status).
             found = self._discover()
             if not found:
                 return False
             self.ip = found
         # Silence here is not "unreachable" — the box may just be slow to wake.
-        # Leave the error empty so the panel stays on "Connecting…" and retries.
+        # Leave the error empty so the panel stays on "Connecting..." and retries.
         info = self._get_xml("device-info", timeout=CONNECT_TIMEOUT)
         if info is None:
             # If we auto-discovered this IP, it may be a stale or wrong host (e.g. a
@@ -192,7 +192,7 @@ class RokuController:
         window. Crucially we then verify each responder actually answers as a
         Roku before returning it — some devices reply to every M-SEARCH
         regardless of the ST filter, and latching onto one of those would wedge
-        the panel on a dead address. Returning None keeps us in "Discovering…".
+        the panel on a dead address. Returning None keeps us in "Discovering...".
         """
         msg = "\r\n".join([
             "M-SEARCH * HTTP/1.1", "HOST: 239.255.255.250:1900",
@@ -355,18 +355,18 @@ class RokuSystem(System):
 
     def _status(self) -> str:
         """Connection phase text. Distinguishes searching for *any* device
-        (Discovering…) from talking to a *specific* one (Connecting…), and a
-        blip on a device we already had (reconnecting…)."""
+        (Discovering...) from talking to a *specific* one (Connecting...), and a
+        blip on a device we already had (reconnecting...)."""
         if self.ctl.ever_connected:
-            return "reconnecting…"
+            return "reconnecting..."
         if self.ctl.error:
             return self.ctl.error
         if not self.ctl.ip:
-            return "Discovering…"  # no IP yet → SSDP search in progress
+            return "Discovering..."  # no IP yet → SSDP search in progress
         n = self.ctl.discovered_count
         if n > 1:
-            return f"Connecting… (first of {n} discovered)"
-        return "Connecting…"       # have an IP → handshaking with that box
+            return f"Connecting... (first of {n} discovered)"
+        return "Connecting..."     # have an IP → handshaking with that box
 
     # -- collapsed ---------------------------------------------------------
     def collapsed_lines(self, width: int) -> list[Line]:
@@ -398,7 +398,7 @@ class RokuSystem(System):
         if media.position and media.duration:
             line += f"   {media.position} / {media.duration}"
         if not self.ctl.connected:
-            line += "   (reconnecting…)"
+            line += "   (reconnecting...)"
         region.text(0, 12, line)
         # Line 1: device identity — model first, then version and IP, parallel to
         # Lighting's "Hue Bridge v2 (192.168.1.99)".
@@ -438,7 +438,7 @@ class RokuSystem(System):
 
     def help_notes(self) -> list[str]:
         return [
-            "Auto-discovers via SSDP (~3s); shows Discovering… while searching.",
+            "Auto-discovers via SSDP (~3s); shows Discovering... while searching.",
             "Multiple Rokus: connects to the first found (first of N discovered).",
             'Set [roku] ip in config to skip discovery and connect instantly.',
         ]

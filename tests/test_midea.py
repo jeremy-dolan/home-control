@@ -106,7 +106,7 @@ def test_system_collapsed_lines_one_row_per_unit(mock_env):
 
 
 def test_system_collapsed_lines_before_discovery():
-    # No mock env: no units yet, single "discovering…" line, not a crash.
+    # No mock env: no units yet, single "Discovering..." line, not a crash.
     s = midea.MideaSystem()
     lines = s.collapsed_lines(80)
     assert len(lines) == 1

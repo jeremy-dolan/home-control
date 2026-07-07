@@ -552,7 +552,7 @@ class MideaSystem(System):
     def collapsed_lines(self, width: int) -> list[Line]:
         units = self._units()
         if not units:
-            msg = self.ctl.error or "discovering…"
+            msg = self.ctl.error or "Discovering..."
             wrapped = textwrap.wrap(msg, max(10, width)) or [msg]
             return [[Seg(line, dim=True)] for line in wrapped[:_STATUS_WRAP_LINES]]
         return [self._unit_row(u, width) for u in units]
@@ -570,7 +570,7 @@ class MideaSystem(System):
     def render_expanded(self, region: Region) -> None:
         units = self._units()
         if not units:
-            msg = self.ctl.error or "Discovering units…"
+            msg = self.ctl.error or "Discovering units..."
             wrapped = textwrap.wrap(msg, max(10, region.width)) or [msg]
             for i, line in enumerate(wrapped):
                 if i >= region.height:
