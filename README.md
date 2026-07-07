@@ -1,16 +1,14 @@
-<p align="center">
-  <img src="assets/demo.gif" width="746" />
-</p>
-
 # home-control
 
 A unified interface to control *every* device in your home. *ALL* smart devices
 are supported! Whatever hardware you've got, just ask Claude to wire it up :)
 
+<p align="center">
+  <img src="assets/demo.gif" width="746" />
+</p>
+
 <!-- Or, 7,000 lines of Python hallucinated by Claude that let me turn my
 lights off. -->
-
----
 
 This is the first app I've vibe-coded from start to finish without any
 intervention. As an experiment, I didn't allow myself to look at the code at
