@@ -4,9 +4,8 @@ version = "0.1.0"
 description = "Unified curses TUI to control home devices (Hue, Roku, Sonos, router, Yoto, Midea)"
 requires-python = ">=3.10"
 dependencies = [
-    # Hue: vendored phue2 lib lives in standalone-apps/hue/phue2-0.0.4; install with
-    #   pip install -e ../standalone-apps/hue/phue2-0.0.4
-    # or rely on PYTHONPATH. httpx is needed for Hue v2 effects.
+    # Hue. httpx is needed for Hue v2 effects.
+    "phue2>=0.0.4",
     "httpx>=0.27",
     # Sonos
     "soco>=0.30",
@@ -35,8 +34,6 @@ include = ["home_control"]
 # Resolve imports from the project venv (anthropic, soco, httpx, ...).
 venvPath = "."
 venv = ".venv"
-# phue2 is installed editable from the vendored source tree; point pyright there.
-extraPaths = ["standalone-apps/hue/phue2-0.0.4/src"]
 pythonVersion = "3.11"  # tomllib (config.py) is stdlib from 3.11
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
