@@ -134,3 +134,55 @@ def test_dialog_close_returns_to_list(mock_env):
     assert s.mode == "device"
     assert s.handle_key(27) is True  # ESC
     assert s.mode == "list"
+
+
+# --- backend mapping tables (midea-local int<->string encodings) -----------------
+
+
+class _FakeDevice:
+    """Duck-types the subset of MideaACDevice that _unit_from_device reads."""
+
+    def __init__(self, attributes: dict, capabilities: dict, device_id=1, name="LR", available=True):
+        self.attributes = attributes
+        self.capabilities = capabilities
+        self.device_id = device_id
+        self.name = name
+        self.available = available
+
+
+def test_unit_from_device_maps_mode_fan_swing():
+    dev = _FakeDevice(
+        attributes={
+            "power": True, "mode": 2, "fan_speed": 60,
+            "swing_vertical": True, "swing_horizontal": False,
+            "target_temperature": 24.5, "temp_fahrenheit": True,
+            "min_temperature": 16.0, "max_temperature": 30.0,
+        },
+        capabilities={
+            "cool_mode": True, "dry_mode": True, "auto_mode": True, "heat_mode": False,
+            "swing_vertical": True, "swing_horizontal": False,
+            "fan_custom": True, "eco": True, "turbo_cool": True, "display_control": True,
+        },
+    )
+    u = midea._unit_from_device(dev, "192.168.1.50")
+    assert u.mode == "COOL"
+    assert u.fan_speed == "MEDIUM"
+    assert u.swing_mode == "VERTICAL"
+    assert u.supported_modes == ("AUTO", "COOL", "DRY", "FAN_ONLY")
+    assert u.supported_fan_speeds == ("SILENT", "LOW", "MEDIUM", "HIGH", "MAX", "AUTO")
+    assert u.supported_swing_modes == ("OFF", "VERTICAL")
+    assert u.supports_eco is True
+    assert u.supports_turbo is True
+    assert u.supports_display_control is True
+
+
+def test_unit_from_device_offline_and_off():
+    dev = _FakeDevice(
+        attributes={"power": False, "mode": 0, "fan_speed": 0},
+        capabilities={},
+        available=False,
+    )
+    u = midea._unit_from_device(dev, "192.168.1.52")
+    assert u.online is False
+    assert u.power is False
+    assert u.swing_mode == "OFF"

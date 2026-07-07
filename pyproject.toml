@@ -1,7 +1,7 @@
 [project]
 name = "home-control"
 version = "0.1.0"
-description = "Unified curses TUI to control home devices (Hue, Roku, Sonos, router, Yoto, Midea)"
+description = "Unified interface (TUI and voice mode) for controlling home devices (Hue, Roku, Sonos, router, Yoto, Midea...)"
 requires-python = ">=3.10"
 dependencies = [
     # Hue: vendored phue2 lib lives in standalone-apps/hue/phue2-0.0.4; install with
@@ -13,8 +13,11 @@ dependencies = [
     "ytmusicapi>=1.7",
     # Voice control: NLU via the Claude API (tool-calling).
     "anthropic>=0.40",
-    # Midea AC: local-LAN control via msmart-ng (import name `msmart`).
-    "msmart-ng>=2026.7.0",
+    # Midea AC: local-LAN control via midea-local (import name `midealocal`),
+    # the extracted core of the Home Assistant midea_ac_lan integration.
+    "midea-local>=6.10.0",
+    # midea-local imports typing_extensions.deprecated but doesn't declare it.
+    "typing_extensions>=4",
 ]
 
 [project.optional-dependencies]

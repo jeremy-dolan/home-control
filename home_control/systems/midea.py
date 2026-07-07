@@ -1,40 +1,40 @@
-"""Midea AC panel (msmart-ng, LAN protocol V2/V3).
+"""Midea AC panel (midea-local, the extracted core of the Home Assistant
+midea_ac_lan integration).
 
 Split into:
-  * MideaController — owns a dedicated background asyncio event-loop thread,
-    since msmart-ng's entire device/discovery API is ``async def`` while every
-    other controller in this app is synchronous. ``poll()``/``apply_edit()``
-    submit coroutines onto that loop via
-    ``asyncio.run_coroutine_threadsafe(...).result(timeout=...)``.
+  * MideaController — thin sync wrapper. Unlike every other backend this app
+    used to bridge to (msmart-ng was fully asyncio), midea-local's device
+    objects are plain ``threading.Thread`` subclasses: each connected unit
+    runs its own persistent background thread doing heartbeats/refreshes and
+    parsing pushed state updates, and ``dev.attributes`` is a live-updated
+    dict you can read with zero network I/O. Only the one-time cloud login
+    (V3 token/key pairing) is ``async def`` — done via a single blocking
+    ``asyncio.run(...)`` call, no dedicated event-loop thread needed.
   * MideaSystem — the panel: one collapsed line per detected unit, and an
     expanded cursor-navigable unit list with per-unit settings nested inline
     under the selected row (mirrors HueSystem's device dialog).
 
-Set HOME_CONTROL_MOCK=1 to render 3 fixture units with no network/asyncio
-loop at all (mock mode never starts the event-loop thread).
+Set HOME_CONTROL_MOCK=1 to render 3 fixture units with no network at all.
 
-V3 devices need a per-device token+key, normally fetched from Midea's cloud
-on first pairing. msmart-ng bakes in a shared demo NetHome Plus account for
-this, so no user Midea account is required; the resulting token+key are
-cached locally (see TOKEN_CACHE_PATH) so the cloud is only touched once per
-device, not on every app start.
-
-msmart-ng's own ``Discover.connect()`` is hardcoded to pair via the "NetHome
-Plus" app's cloud (``NetHomePlusCloud``) — it has no option to use a
-different Midea-family app's backend. Users whose account instead lives in
-the "SmartHome"/MSmartHome app's cloud (a different backend entirely: own
-base URL, own app ID, own login crypto — same physical protocol, different
-account database) need ``[midea] cloud = "smarthome"`` in config, which
-routes pairing through ``_authenticate_smarthome`` (a from-scratch
-replication of ``Discover._authenticate_device``'s logic against
-``SmartHomeCloud`` instead) rather than ``Discover.connect``.
+V3 devices need a per-device token+key, fetched from Midea's cloud on first
+pairing (then cached locally, see TOKEN_CACHE_PATH, so the cloud is only
+touched once per device). Midea's app ecosystem has several incompatible
+cloud backends behind the same physical protocol — "NetHome Plus" (the
+default; msmart-ng's old built-in shared demo account lived here) and
+"SmartHome"/MSmartHome (what Midea is migrating users to) are the two
+relevant ones; set ``[midea] cloud = "smarthome"`` in config to use the
+latter. This library's SmartHomeCloud implementation is the reason for the
+switch away from msmart-ng: msmart-ng's SmartHome ``get_token`` call has been
+broken since early 2025 (upstream issue #201, never fixed) because it omits
+an ``applianceCodes`` field the SmartHome endpoint silently requires;
+midea-local's cloud.py includes it and has been verified live against a real
+account/unit.
 """
 
 from __future__ import annotations
 
 import asyncio
 import curses
-import dataclasses
 import json
 import os
 import textwrap
@@ -44,30 +44,40 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from msmart.cloud import CloudError, SmartHomeCloud
-from msmart.device import AirConditioner
-from msmart.discover import Discover
-from msmart.lan import AuthenticationError, Security
+from aiohttp import ClientSession
+from midealocal.cloud import get_midea_cloud
+from midealocal.const import DeviceType
+from midealocal.devices import device_selector
+from midealocal.devices.ac import MideaACDevice
+from midealocal.discover import discover as midea_discover
 
 from .. import config
 from ..ui import Line, Region, Seg, hint, hint_row, justify
 from .base import System, VoiceAction
 
-DISCOVERY_WAIT = 5      # seconds msmart-ng itself waits for broadcast replies
-DISCOVERY_TIMEOUT = 15  # bridge timeout wrapping a whole discovery pass
-CONNECT_TIMEOUT = 8     # bridge timeout wrapping a refresh() of already-known units
-EDIT_TIMEOUT = 5        # bridge timeout for a single dialog field edit (render thread)
-# Minimum gap between discovery attempts once we have zero connected units. A
-# failure here is often a cloud-side auth rate limit (msmart-ng's shared demo
-# NetHome Plus account) — retrying every poll tick (as fast as 1s when
-# focused) would hammer that endpoint and prolong the lockout, unlike Roku's
-# cheap local-only SSDP retry-every-poll convention.
+# Minimum gap between discovery attempts. A failure here can be a cloud-side
+# auth rate limit — retrying every poll tick (as fast as 1s when focused)
+# would hammer that endpoint, unlike Roku's cheap local-only SSDP retry.
 DISCOVERY_RETRY_INTERVAL = 60
+# Fixed settle delay after sending a command before re-reading device state
+# for the mirrored cache. midea-local's set_attribute()/set_target_temperature()
+# are fire-and-forget at the protocol layer — the actual attribute update
+# lands asynchronously once the unit's persistent background thread parses
+# its ack, which is sub-second on a LAN.
+EDIT_SETTLE_DELAY = 0.3
 
 TOKEN_CACHE_PATH = Path(
     os.environ.get("HOME_CONTROL_MIDEA_CACHE")
     or (Path.home() / ".cache" / "home-control" / "midea_tokens.json")
 )
+
+_CLOUD_NAMES = {"nethome_plus": "NetHome Plus", "smarthome": "SmartHome", "meiju": "美的美居"}
+_MODE_TO_INT = {"AUTO": 1, "COOL": 2, "DRY": 3, "HEAT": 4, "FAN_ONLY": 5}
+_INT_TO_MODE = {v: k for k, v in _MODE_TO_INT.items()}
+_FAN_TO_INT = {"SILENT": 20, "LOW": 40, "MEDIUM": 60, "HIGH": 80, "MAX": 100, "AUTO": 102}
+_INT_TO_FAN = {v: k for k, v in _FAN_TO_INT.items()}
+_SWING_TO_BOOLS = {"OFF": (False, False), "VERTICAL": (True, False), "HORIZONTAL": (False, True), "BOTH": (True, True)}
+_BOOLS_TO_SWING = {v: k for k, v in _SWING_TO_BOOLS.items()}
 
 _MODE_LABEL = {"COOL": "COOL", "DRY": "DRY", "AUTO": "AUTO", "FAN_ONLY": "FAN"}
 _FIELD_INDENT = "    "
@@ -112,18 +122,16 @@ class MideaUnit:
 @dataclass
 class EditableField:
     """One editable row in the per-unit dialog. ``field_type`` drives both how
-    the value renders and how ←/→/ENTER mutate it: bool/action toggle,
-    int/float step by ``step`` (and accept typed entry), enum cycles a list
-    (held in ``step``). "action" behaves exactly like "bool" here — the only
-    difference (display_on has no setter, needs `toggle_display()` instead of
-    setattr+apply) lives in MideaController.apply_edit, not in this class."""
+    the value renders and how ←/→/ENTER mutate it: bool toggles, int/float
+    steps by ``step`` (and accepts typed entry), enum cycles a list (held in
+    ``step``)."""
     name: str
     api_key: str
     value: Any
     min_val: Any = None
     max_val: Any = None
     step: Any = None
-    field_type: str = "info"  # "bool" | "int" | "float" | "enum" | "action"
+    field_type: str = "info"  # "bool" | "int" | "float" | "enum"
 
 
 def unit_badge(u: MideaUnit) -> tuple[str, str]:
@@ -154,10 +162,6 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
     return f"{round(_c_to_f(c)) if fahrenheit else round(c)}°{'F' if fahrenheit else 'C'}"
 
 
-def _enum_name(v: Any) -> str:
-    return v.name if hasattr(v, "name") else str(v)
-
-
 # ---------------------------------------------------------------------------
 # Token/key cache — best-effort, never fatal (a cache miss just re-pairs).
 # ---------------------------------------------------------------------------
@@ -178,26 +182,62 @@ def _save_token_cache(cache: dict[str, dict[str, str]], path: Path = TOKEN_CACHE
         pass
 
 
-def _unit_from_device(dev: AirConditioner, name_override: str = "") -> MideaUnit:
+def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
+    a = dev.attributes
+    caps = dev.capabilities or {}
+    modes = [
+        name
+        for name, present in (
+            ("AUTO", caps.get("auto_mode")),
+            ("COOL", caps.get("cool_mode")),
+            ("DRY", caps.get("dry_mode")),
+            ("HEAT", caps.get("heat_mode")),
+        )
+        if present
+    ]
+    modes.append("FAN_ONLY")  # always available; not gated by a capability flag
+    if caps.get("fan_custom"):
+        fan_speeds = ["SILENT", "LOW", "MEDIUM", "HIGH", "MAX", "AUTO"]
+    else:
+        fan_speeds = [
+            name
+            for name, present in (
+                ("SILENT", caps.get("fan_silent")),
+                ("LOW", caps.get("fan_low")),
+                ("MEDIUM", caps.get("fan_medium")),
+                ("HIGH", caps.get("fan_high")),
+            )
+            if present
+        ]
+        fan_speeds.append("AUTO")
+    swings = ["OFF"]
+    if caps.get("swing_vertical"):
+        swings.append("VERTICAL")
+    if caps.get("swing_horizontal"):
+        swings.append("HORIZONTAL")
+    if caps.get("swing_vertical") and caps.get("swing_horizontal"):
+        swings.append("BOTH")
+    vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
     return MideaUnit(
-        id=dev.id, ip=dev.ip, name=name_override or dev.name or f"AC {dev.id}",
-        online=dev.online,
-        power=bool(dev.power_state),
-        mode=_enum_name(dev.operational_mode) if dev.operational_mode is not None else "COOL",
-        fan_speed=_enum_name(dev.fan_speed) if dev.fan_speed is not None else "AUTO",
-        swing_mode=_enum_name(dev.swing_mode) if dev.swing_mode is not None else "OFF",
-        target_temp_c=dev.target_temperature if dev.target_temperature is not None else 24.0,
-        indoor_temp_c=dev.indoor_temperature,
-        outdoor_temp_c=dev.outdoor_temperature,
-        fahrenheit=bool(dev.fahrenheit),
-        eco=bool(dev.eco), turbo=bool(dev.turbo), display_on=bool(dev.display_on),
-        filter_alert=bool(dev.filter_alert), error_code=dev.error_code or 0,
-        min_temp_c=dev.min_target_temperature, max_temp_c=dev.max_target_temperature,
-        supported_modes=tuple(_enum_name(m) for m in dev.supported_operation_modes),
-        supported_fan_speeds=tuple(_enum_name(s) for s in dev.supported_fan_speeds),
-        supported_swing_modes=tuple(_enum_name(s) for s in dev.supported_swing_modes),
-        supports_eco=dev.supports_eco, supports_turbo=dev.supports_turbo,
-        supports_display_control=dev.supports_display_control,
+        id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
+        online=dev.available,
+        power=bool(a.get("power")),
+        mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
+        fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
+        swing_mode=_BOOLS_TO_SWING.get((vertical, horizontal), "OFF"),
+        target_temp_c=float(a.get("target_temperature") or 24.0),
+        indoor_temp_c=a.get("indoor_temperature"),
+        outdoor_temp_c=a.get("outdoor_temperature"),
+        fahrenheit=bool(a.get("temp_fahrenheit")),
+        eco=bool(a.get("eco_mode")), turbo=bool(a.get("boost_mode")), display_on=bool(a.get("screen_display")),
+        filter_alert=bool(a.get("full_dust")), error_code=int(a.get("error_code") or 0),
+        min_temp_c=float(a.get("min_temperature") or 16.0), max_temp_c=float(a.get("max_temperature") or 30.0),
+        supported_modes=tuple(dict.fromkeys(modes)),
+        supported_fan_speeds=tuple(dict.fromkeys(fan_speeds)),
+        supported_swing_modes=tuple(swings),
+        supports_eco=bool(caps.get("eco")),
+        supports_turbo=bool(caps.get("turbo_cool") or caps.get("turbo_heat")),
+        supports_display_control=bool(caps.get("display_control")),
     )
 
 
@@ -212,209 +252,158 @@ class MideaController:
         self._account: str | None = config.get("midea", "account")
         self._password: str | None = config.get("midea", "password")
         self._cloud_kind = (config.get("midea", "cloud", "nethome_plus") or "nethome_plus").lower()
-        self._smarthome_cloud: SmartHomeCloud | None = None
         self._lock = threading.Lock()
         self._units: dict[int, MideaUnit] = {}
-        self._devices: dict[int, AirConditioner] = {}
+        self._devices: dict[int, MideaACDevice] = {}
+        self._ips: dict[int, str] = {}
         self._token_cache = _load_token_cache()
         self.error = ""
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._loop_thread: threading.Thread | None = None
         self._attempted = False           # has a real discovery pass ever run
         self._last_attempt_t = 0.0
-        self._last_seen_count = 0         # raw devices seen in the last pass, before connect
+        self._last_seen_count = 0         # raw devices seen in the last pass
         self._last_connect_error = ""     # most recent per-device connect/auth failure
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
-        if self.mock:
-            return
-        self._loop = asyncio.new_event_loop()
-        self._loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
-        self._loop_thread.start()
+        pass
 
     def stop(self) -> None:
-        if self._loop is None:
-            return
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._loop_thread:
-            self._loop_thread.join(timeout=2)
-
-    # -- asyncio bridge --------------------------------------------------
-    def _run_coro(self, coro: Any, timeout: float) -> Any | None:
-        """Submit a coroutine to the controller's own event loop and block
-        (bounded) for the result. A timeout does NOT cancel the coroutine —
-        msmart's own LAN.send already retries internally, and the next poll's
-        refresh() reconciles whatever actually landed, matching the rest of
-        this app's "poll reconciles" philosophy."""
-        if self._loop is None:
-            return None
-        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        try:
-            return fut.result(timeout=timeout)
-        except Exception:
-            return None
-
-    # -- cloud pairing (SmartHome app backend; NetHome Plus goes through
-    # Discover.connect instead, see module docstring) --------------------
-    async def _get_smarthome_cloud(self) -> SmartHomeCloud:
-        if self._smarthome_cloud is None:
-            cloud = SmartHomeCloud(account=self._account, password=self._password)
-            await cloud.login()
-            self._smarthome_cloud = cloud
-        return self._smarthome_cloud
-
-    async def _authenticate_smarthome(self, dev: AirConditioner) -> bool:
-        try:
-            cloud = await self._get_smarthome_cloud()
-        except CloudError as e:
-            self._last_connect_error = str(e)
-            return False
-        for endian in ("little", "big"):
-            udpid = Security.udpid(dev.id.to_bytes(6, endian)).hex()
+        for dev in list(self._devices.values()):
             try:
-                token, key = await cloud.get_token(udpid)
-            except CloudError as e:
-                self._last_connect_error = str(e)
-                continue
-            try:
-                await dev.authenticate(token, key)
-                return True
-            except AuthenticationError:
-                continue
-        return False
-
-    # -- discovery/connect (run as coroutines on the loop thread) --------
-    async def _finish_connect(self, dev: AirConditioner, name_override: str = "") -> MideaUnit | None:
-        ok = False
-        if dev.version == 3:
-            cached = self._token_cache.get(str(dev.id))
-            if cached:
-                try:
-                    await dev.authenticate(cached["token"], cached["key"])
-                    await dev.refresh()
-                    ok = dev.online
-                except Exception:
-                    ok = False
-        if not ok:
-            try:
-                if dev.version == 3 and self._cloud_kind == "smarthome":
-                    ok = await self._authenticate_smarthome(dev)
-                    if ok:
-                        await dev.refresh()
-                        ok = dev.online
-                else:
-                    ok = await Discover.connect(dev)
-            except Exception as e:
-                ok = False
-                self._last_connect_error = str(e) or type(e).__name__
-            if ok and dev.version == 3 and dev.token and dev.key:
-                self._token_cache[str(dev.id)] = {"token": dev.token, "key": dev.key}
-                _save_token_cache(self._token_cache)
-        if not ok:
-            if not self._last_connect_error:
-                self._last_connect_error = f"{dev.ip} did not respond to pairing"
-            return None
-        if dev.id not in self._devices:
-            try:
-                await dev.get_capabilities()
+                dev.close()
             except Exception:
                 pass
-        self._devices[dev.id] = dev
-        return _unit_from_device(dev, name_override)
 
-    async def _connect_broadcast(self) -> list[MideaUnit]:
-        devices = cast(list[AirConditioner], await Discover.discover(
-            auto_connect=False, timeout=DISCOVERY_WAIT, account=self._account, password=self._password,
-        ))
-        self._last_seen_count = len(devices)
-        results = await asyncio.gather(*(self._finish_connect(d) for d in devices))
-        return [u for u in results if u is not None]
+    # -- cloud pairing (V3 token/key fetch) -------------------------------
+    def _cloud_name(self) -> str:
+        return _CLOUD_NAMES.get(self._cloud_kind, "NetHome Plus")
 
-    async def _connect_pinned(self) -> list[MideaUnit]:
-        async def one(ip: str, name: str) -> MideaUnit | None:
-            try:
-                dev = cast(
-                    "AirConditioner | None",
-                    await Discover.discover_single(
-                        ip, auto_connect=False, account=self._account, password=self._password,
-                    ),
-                )
-            except Exception:
-                return None
-            if dev is None:
-                return None
-            self._last_seen_count += 1
-            return await self._finish_connect(dev, name)
+    async def _fetch_keys(self, device_ids: list[int]) -> dict[int, dict[int, dict[str, str]]]:
+        async with ClientSession() as session:
+            cloud = get_midea_cloud(self._cloud_name(), session, self._account or "", self._password or "")
+            if not await cloud.login():
+                raise RuntimeError("Failed to login to cloud")
+            return {did: await cloud.get_cloud_keys(did) for did in device_ids}
 
-        self._last_seen_count = 0
-        results = await asyncio.gather(*(one(p["ip"], p.get("name", "")) for p in self._pinned))
-        return [u for u in results if u is not None]
+    # -- discovery/connect (blocking; runs on the Poller's own thread) ----
+    def _discover_raw(self) -> dict[int, dict[str, Any]]:
+        if self._pinned:
+            found: dict[int, dict[str, Any]] = {}
+            for p in self._pinned:
+                try:
+                    # discover()'s type hint says list[...] | None, but a bare
+                    # IP string is the documented/working usage (verified live) —
+                    # a list would be double-wrapped and break sendto().
+                    one = midea_discover(discover_type=[DeviceType.AC], ip_address=cast(Any, p["ip"]))
+                except Exception:
+                    one = {}
+                for did, d in one.items():
+                    found[did] = {**d, "_name": p.get("name") or ""}
+            return found
+        try:
+            return midea_discover(discover_type=[DeviceType.AC])
+        except Exception:
+            return {}
+
+    def _try_connect(self, raw: dict[str, Any], token: str, key: str) -> MideaACDevice | None:
+        dev = cast(
+            "MideaACDevice | None",
+            device_selector(
+                name=raw.get("_name") or "",
+                device_id=raw["device_id"], device_type=raw["type"], ip_address=raw["ip_address"],
+                port=raw["port"], token=token, key=key, device_protocol=raw["protocol"],
+                model=raw.get("model", ""), subtype=0, customize="",
+            ),
+        )
+        if dev is None:
+            return None
+        if dev.connect(check_protocol=True):
+            return dev
+        return None
 
     def _discover_all(self) -> None:
-        """Run a discovery pass, gated by DISCOVERY_RETRY_INTERVAL once we have
-        zero connected units — a failure here is often the cloud-side rate
-        limit, so this must not be retried on every poll tick like Roku's
-        cheap local SSDP retry."""
+        """Run a discovery pass, gated by DISCOVERY_RETRY_INTERVAL — a failure
+        here is often a cloud-side rate limit, so this must not be retried on
+        every poll tick like Roku's cheap local SSDP retry."""
         now = time.time()
         if self._attempted and now - self._last_attempt_t < DISCOVERY_RETRY_INTERVAL:
             return
         self._last_attempt_t = now
         self._attempted = True
-        self._last_seen_count = 0
+
+        raw = self._discover_raw()
+        self._last_seen_count = len(raw)
         self._last_connect_error = ""
-        if self._pinned:
-            results = self._run_coro(self._connect_pinned(), DISCOVERY_TIMEOUT)
-        else:
-            results = self._run_coro(self._connect_broadcast(), DISCOVERY_TIMEOUT)
-        if results:
+
+        new_ids = [did for did in raw if did not in self._devices]
+        new_v3_ids = [
+            did for did in new_ids
+            if raw[did]["protocol"] == 3 and str(did) not in self._token_cache
+        ]
+        keys_by_device: dict[int, dict[int, dict[str, str]]] = {}
+        if new_v3_ids and self._account and self._password:
+            try:
+                keys_by_device = asyncio.run(self._fetch_keys(new_v3_ids))
+            except Exception as e:
+                self._last_connect_error = str(e) or type(e).__name__
+
+        connected_any = False
+        for did in new_ids:
+            d = raw[did]
+            dev: MideaACDevice | None = None
+            if d["protocol"] != 3:
+                dev = self._try_connect(d, "", "")
+            else:
+                cached = self._token_cache.get(str(did))
+                if cached:
+                    dev = self._try_connect(d, cached["token"], cached["key"])
+                    if dev is None:
+                        self._token_cache.pop(str(did), None)
+                if dev is None:
+                    for method_keys in keys_by_device.get(did, {}).values():
+                        dev = self._try_connect(d, method_keys["token"], method_keys["key"])
+                        if dev is not None:
+                            self._token_cache[str(did)] = method_keys
+                            _save_token_cache(self._token_cache)
+                            break
+            if dev is not None:
+                dev.daemon = True
+                dev.open()
+                self._devices[did] = dev
+                self._ips[did] = d["ip_address"]
+                connected_any = True
+            elif not self._last_connect_error:
+                self._last_connect_error = f"{d['ip_address']} did not respond to pairing"
+
+        if connected_any:
             with self._lock:
-                for u in results:
-                    self._units[u.id] = u
+                for did, dev in self._devices.items():
+                    self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
             self.error = ""
         elif not self._units:
             if self._last_seen_count == 0:
                 self.error = "No Midea units responded on the LAN"
             else:
-                self.error = f"Found {self._last_seen_count} unit(s) but couldn't pair: {self._last_connect_error}"
+                self.error = f"Found {self._last_seen_count} unit(s) but couldn't pair: {self._last_connect_error or 'unknown error'}"
 
-    def _refresh_all(self) -> None:
-        async def _refresh_one(uid: int, dev: AirConditioner) -> MideaUnit | None:
-            try:
-                await dev.refresh()
-                prev = self._units.get(uid)
-                return _unit_from_device(dev, prev.name if prev else "")
-            except Exception:
-                prev = self._units.get(uid)
-                if prev is None:
-                    return None
-                return dataclasses.replace(prev, online=False)
-
-        async def _refresh_all_coro() -> list[MideaUnit]:
-            results = await asyncio.gather(
-                *(_refresh_one(uid, dev) for uid, dev in list(self._devices.items()))
-            )
-            return [u for u in results if u is not None]
-
-        results = self._run_coro(_refresh_all_coro(), CONNECT_TIMEOUT)
-        if results:
-            with self._lock:
-                for u in results:
-                    self._units[u.id] = u
+    def _refresh_snapshot(self) -> None:
+        """No network I/O — each connected device's own persistent background
+        thread keeps ``dev.attributes``/``dev.available`` live-updated, so
+        this just re-derives MideaUnit snapshots from current in-memory
+        state."""
+        if not self._devices:
+            return
+        with self._lock:
+            for did, dev in self._devices.items():
+                self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
 
     def poll(self, focused: bool) -> None:
         if self.mock:
             self._load_mock()
             return
-        # Always due for a look — internally cooldown-gated once we have zero
-        # connected units, and cheap (no network call) once fully connected.
-        # This keeps retrying a transient failure (e.g. a cloud rate limit)
-        # instead of getting stuck on the first attempt's error forever, and
-        # still picks up units that appear on the LAN later.
         self._discover_all()
-        if self._devices:
-            self._refresh_all()
+        self._refresh_snapshot()
 
     # -- reads/commands (main thread) -------------------------------------
     def snapshot(self) -> dict[int, MideaUnit]:
@@ -429,41 +418,39 @@ class MideaController:
 
     def apply_edit(self, unit_id: int, fld: EditableField) -> None:
         """Push one edited field to the live device and mirror the result into
-        the cache. Runs from the render thread (dialog key handler) — bounded
-        by EDIT_TIMEOUT so a hung/unreachable unit can't freeze the UI. Only
-        mirrors the cache from the post-apply device state, never
-        optimistically — matches HueController.apply_light_edit. ``fld.value``
-        is always in the unit's own *display* scale (°F if the unit prefers
-        it) — conversion to the wire unit (°C) happens here, not by callers."""
+        the cache. midea-local's setters are fire-and-forget at the protocol
+        layer (the actual state update lands via the device's own background
+        thread once it parses the ack) — sleep a short settle delay, then
+        rebuild the cached MideaUnit from the device's *actual* current
+        state, never optimistically."""
         dev = self._devices.get(unit_id)
         if dev is None:
             return
-
-        async def _do() -> MideaUnit:
-            if fld.api_key == "display_on":
-                await dev.toggle_display()
-            else:
-                value: Any = fld.value
-                if fld.api_key == "target_temperature" and dev.fahrenheit:
-                    value = _f_to_c(value)
-                enum_classes: dict[str, Any] = {
-                    "operational_mode": AirConditioner.OperationalMode,
-                    "fan_speed": AirConditioner.FanSpeed,
-                    "swing_mode": AirConditioner.SwingMode,
-                }
-                if fld.api_key in enum_classes:
-                    value = getattr(enum_classes[fld.api_key], value)
-                setattr(dev, fld.api_key, value)
-                await dev.apply()
-            prev = self._units.get(unit_id)
-            return _unit_from_device(dev, prev.name if prev else "")
-
-        result = self._run_coro(_do(), EDIT_TIMEOUT)
-        if result is not None:
-            with self._lock:
-                self._units[unit_id] = result
-        else:
-            self.error = f"Command to unit {unit_id} timed out"
+        try:
+            if fld.api_key == "operational_mode":
+                dev.set_attribute("mode", _MODE_TO_INT[fld.value])
+            elif fld.api_key == "fan_speed":
+                dev.set_attribute("fan_speed", _FAN_TO_INT[fld.value])
+            elif fld.api_key == "swing_mode":
+                vertical, horizontal = _SWING_TO_BOOLS[fld.value]
+                dev.set_swing(vertical, horizontal)
+            elif fld.api_key == "target_temperature":
+                value = _f_to_c(fld.value) if dev.attributes.get("temp_fahrenheit") else float(fld.value)
+                dev.set_target_temperature(value, None)
+            elif fld.api_key == "eco":
+                dev.set_attribute("eco_mode", fld.value)
+            elif fld.api_key == "turbo":
+                dev.set_attribute("boost_mode", fld.value)
+            elif fld.api_key == "display_on":
+                dev.set_attribute("screen_display", fld.value)
+            else:  # "power_state"
+                dev.set_attribute("power", fld.value)
+        except Exception as e:
+            self.error = f"Command to unit {unit_id} failed: {type(e).__name__}"
+            return
+        time.sleep(EDIT_SETTLE_DELAY)
+        with self._lock:
+            self._units[unit_id] = _unit_from_device(dev, self._ips.get(unit_id, ""))
 
     # -- mock fixtures -----------------------------------------------------
     def _load_mock(self) -> None:
@@ -614,7 +601,7 @@ class MideaSystem(System):
     def _field_value(self, fld: EditableField, sel: bool) -> str:
         if self._num_buf is not None and sel and fld.field_type in ("int", "float"):
             return self._num_buf + "_"
-        if fld.field_type in ("bool", "action"):
+        if fld.field_type == "bool":
             return "on" if fld.value else "off"
         if fld.api_key == "target_temperature":
             return f"{fld.value}°{'F' if self.info_fahrenheit else 'C'}"
@@ -642,7 +629,7 @@ class MideaSystem(System):
         if u.supports_turbo:
             fields.append(EditableField("turbo", "turbo", u.turbo, field_type="bool"))
         if u.supports_display_control:
-            fields.append(EditableField("display", "display_on", u.display_on, field_type="action"))
+            fields.append(EditableField("display", "display_on", u.display_on, field_type="bool"))
         self.info_fields = fields
         self.info_read_only = [
             ("Indoor", _fmt_temp(u.indoor_temp_c, u.fahrenheit)),
@@ -686,7 +673,7 @@ class MideaSystem(System):
     def help_notes(self) -> list[str]:
         return [
             "Auto-discovers via LAN broadcast; pin IPs in [midea] units to skip it.",
-            "Uses msmart-ng's shared demo cloud account once, then caches the token.",
+            "V3 units need a one-time cloud pairing; the token is cached afterward.",
         ]
 
     # -- input -----------------------------------------------------------
@@ -741,7 +728,7 @@ class MideaSystem(System):
 
     def _device_step(self, direction: int) -> None:
         fld = self.info_fields[self.info_cursor]
-        if fld.field_type in ("bool", "action"):
+        if fld.field_type == "bool":
             fld.value = not fld.value
             self._apply(fld)
         elif fld.field_type in ("int", "float"):
@@ -755,7 +742,7 @@ class MideaSystem(System):
 
     def _device_enter(self) -> None:
         fld = self.info_fields[self.info_cursor]
-        if fld.field_type in ("bool", "action"):
+        if fld.field_type == "bool":
             fld.value = not fld.value
             self._apply(fld)
         elif fld.field_type in ("int", "float"):
