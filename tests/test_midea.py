@@ -112,28 +112,51 @@ def test_system_collapsed_lines_before_discovery():
     assert len(lines) == 1
 
 
-def test_dialog_open_and_cycle_mode(mock_env):
+def test_flat_cursor_cycle_mode(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    assert s.handle_key(ord("i")) is True
-    assert s.mode == "device"
-    mode_idx = next(i for i, f in enumerate(s.info_fields) if f.api_key == "operational_mode")
-    s.info_cursor = mode_idx
-    fld = s.info_fields[mode_idx]
+    flat = s._flat()
+    mode_idx = next(i for i, (u, fi) in enumerate(flat) if s._unit_fields[u.id][fi].api_key == "operational_mode")
+    s.cursor = mode_idx
+    unit, field_idx = flat[mode_idx]
+    unit_id = unit.id
+    fld = s._unit_fields[unit_id][field_idx]
     before = fld.value
     assert s.handle_key(curses.KEY_RIGHT) is True
-    after = s.info_fields[mode_idx].value
+    after = s._unit_fields[unit_id][field_idx].value
     assert after != before
     assert after in fld.step
 
 
-def test_dialog_close_returns_to_list(mock_env):
+def test_flat_cursor_spans_multiple_units(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    s.handle_key(ord("i"))
-    assert s.mode == "device"
-    assert s.handle_key(27) is True  # ESC
-    assert s.mode == "list"
+    flat = s._flat()
+    unit_ids = {u.id for u, _ in flat}
+    assert len(unit_ids) >= 2  # Living Room + Bedroom are both online in the mock fixture
+    s.cursor = 0
+    first_unit = flat[0][0].id
+    for _ in range(len(s._unit_fields[first_unit])):
+        s.handle_key(curses.KEY_DOWN)
+    flat2 = s._flat()
+    assert flat2[s.cursor][0].id != first_unit
+
+
+def test_numeric_entry_sets_target_temp(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    flat = s._flat()
+    temp_idx = next(i for i, (u, fi) in enumerate(flat) if s._unit_fields[u.id][fi].api_key == "target_temperature")
+    s.cursor = temp_idx
+    unit, field_idx = flat[temp_idx]
+    unit_id = unit.id
+    assert s.handle_key(ord("\n")) is True  # ENTER on an int field starts numeric entry
+    assert s._num_buf == ""
+    for ch in "70":
+        s.handle_key(ord(ch))
+    assert s.handle_key(ord("\n")) is True  # commit
+    assert s._num_buf is None
+    assert s._unit_fields[unit_id][field_idx].value == 70
 
 
 # --- backend mapping tables (midea-local int<->string encodings) -----------------
