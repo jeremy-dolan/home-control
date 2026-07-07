@@ -58,7 +58,7 @@ def _setup_logging() -> None:
         filename=str(LOG_PATH), filemode="a", level=logging.WARNING,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    for name in ("phue_modern", "httpx", "httpcore", "soco", "msmart"):
+    for name in ("phue_modern", "httpx", "httpcore", "soco", "midealocal"):
         logging.getLogger(name).setLevel(logging.ERROR)
 
 
