@@ -734,8 +734,8 @@ class MideaSystem(System):
 
     def help_notes(self) -> list[str]:
         return [
-            "Hotkeys act on the selected unit directly: p power, m mode, f fan speed,",
-            "s swing, e eco, t turbo, d display. Each field's colored letter is its key.",
+            "Hotkeys act on the selected unit; each field's colored letter is",
+            "its key: p power, m mode, f fan, s swing, e eco, t turbo, d display.",
             "Auto-discovers via LAN broadcast; pin IPs in [midea] units to skip it.",
             "V3 units need a one-time cloud pairing; the token is cached afterward.",
         ]
