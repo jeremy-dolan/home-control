@@ -524,11 +524,11 @@ class MideaController:
 # ---------------------------------------------------------------------------
 
 
-_CHIP_LABEL = {"FAN_ONLY": "FAN", "SILENT": "SIL", "MEDIUM": "MED", "VERTICAL": "VERT", "HORIZONTAL": "HORIZ"}
+_CHIP_LABEL = {"FAN_ONLY": "Fan", "MEDIUM": "Med"}
 
 
 def _chip_label(opt: str) -> str:
-    return _CHIP_LABEL.get(opt, opt)
+    return _CHIP_LABEL.get(opt, opt.title())
 
 
 class MideaSystem(System):
@@ -635,8 +635,8 @@ class MideaSystem(System):
 
     def _card_rows(self, u: MideaUnit, is_selected: bool, width: int) -> list[Line]:
         header = self._header_row(u, is_selected, width)
-        row_a = self._row_a(u)
-        row_b = self._row_b(u)
+        row_a = self._row_a(u, width)
+        row_b = self._row_b(u, width)
         if not u.online:
             return [self._dim(header), self._dim(row_a), self._dim(row_b)]
         return [header, row_a, row_b]
@@ -664,30 +664,32 @@ class MideaSystem(System):
         right.append(Seg(tgt_text, self.color if is_selected else "", bold=is_selected))
         return justify(left, right, width)
 
-    def _row_a(self, u: MideaUnit) -> Line:
-        """Power, Mode (all options, current one highlighted), Eco, Display."""
-        segs: Line = [Seg(_FIELD_INDENT)]
-        segs.extend(self._power_chip(u.power))
-        segs.append(Seg("     "))
-        segs.extend(self._enum_chip("Mode", list(u.supported_modes), u.mode))
+    def _row_a(self, u: MideaUnit, width: int) -> Line:
+        """Mode (all options, current one highlighted) on the left; Eco/
+        Display toggles right-justified to match the header's temp. Power
+        isn't repeated here — the badge (● OFF/COOL/...) and ENTER already
+        cover it."""
+        left: Line = [Seg(_FIELD_INDENT)]
+        left.extend(self._enum_chip("Mode", list(u.supported_modes), u.mode))
+        right: Line = []
         if u.supports_eco:
-            segs.append(Seg("       "))
-            segs.extend(self._toggle_chip("Eco", u.eco))
+            right.extend(self._toggle_chip("Eco", u.eco))
         if u.supports_display_control:
-            segs.append(Seg("   "))
-            segs.extend(self._toggle_chip("Displ", u.display_on))
-        return segs
+            if right:
+                right.append(Seg("   "))
+            right.extend(self._toggle_chip("Displ", u.display_on))
+        return justify(left, right, width) if right else left
 
-    def _row_b(self, u: MideaUnit) -> Line:
-        """Fan speed (all options, current one highlighted), Swing, Turbo."""
-        segs: Line = [Seg(_FIELD_INDENT)]
-        segs.extend(self._enum_chip("Fan speed", list(u.supported_fan_speeds), u.fan_speed))
-        segs.append(Seg("     "))
-        segs.extend(self._toggle_chip("Swing", u.swing_mode != "OFF"))
+    def _row_b(self, u: MideaUnit, width: int) -> Line:
+        """Fan speed (all options, current one highlighted) on the left;
+        Swing/Turbo toggles right-justified to match."""
+        left: Line = [Seg(_FIELD_INDENT)]
+        left.extend(self._enum_chip("Fan", list(u.supported_fan_speeds), u.fan_speed))
+        right: Line = list(self._toggle_chip("Swing", u.swing_mode != "OFF"))
         if u.supports_turbo:
-            segs.append(Seg("   "))
-            segs.extend(self._toggle_chip("Turbo", u.turbo))
-        return segs
+            right.append(Seg("   "))
+            right.extend(self._toggle_chip("Turbo", u.turbo))
+        return justify(left, right, width)
 
     def _enum_chip(self, label: str, options: list[str], current: str) -> Line:
         """``label``'s first letter is always the accent-colored mnemonic;
@@ -709,14 +711,6 @@ class MideaSystem(System):
         if value:
             return [Seg(f"{label} {dot}", self.color, bold=True)]
         return [Seg(label[0], self.color, bold=True), Seg(f"{label[1:]} {dot}", dim=True)]
-
-    def _power_chip(self, value: bool) -> Line:
-        """Same mnemonic/highlight convention as _toggle_chip, but "on"/"off"
-        text instead of a dot — Power is the one field worth spelling out."""
-        state = "on" if value else "off"
-        if value:
-            return [Seg(f"Power {state}", self.color, bold=True)]
-        return [Seg("P", self.color, bold=True), Seg(f"ower {state}", dim=True)]
 
     # -- toolbar/help --------------------------------------------------
     def toolbar(self) -> str:
