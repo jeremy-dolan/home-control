@@ -141,13 +141,14 @@ class EditableField:
 
 def unit_badge(u: MideaUnit) -> tuple[str, str]:
     """(badge text, color) for a unit's status dot: colored accent + mode word
-    when actively conditioning, grey "FAN" for fan-only, dim grey (no word)
-    for off, "????" for unreachable. Deliberately not Router's red-for-offline
-    convention — off/unreachable read as calm grey here, not alarming."""
+    when actively conditioning, grey "FAN" for fan-only, grey "OFF" for
+    powered off, "????" for unreachable. Deliberately not Router's
+    red-for-offline convention — off/unreachable read as calm grey here,
+    not alarming."""
     if not u.online:
         return "● ????", "light_grey"
     if not u.power:
-        return "●", "light_grey"
+        return "● OFF", "light_grey"
     if u.mode == "FAN_ONLY":
         return "● FAN", "light_grey"
     return f"● {_MODE_LABEL.get(u.mode, u.mode)}", "midea_teal"

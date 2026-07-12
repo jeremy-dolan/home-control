@@ -47,7 +47,7 @@ def test_unit_badge_fan_only():
 def test_unit_badge_off():
     u = _unit(power=False)
     label, color = midea.unit_badge(u)
-    assert label == "●"
+    assert label == "● OFF"
     assert color == "light_grey"
 
 
