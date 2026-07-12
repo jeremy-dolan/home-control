@@ -121,7 +121,7 @@ class MideaUnit:
     min_temp_c: float = 16.0
     max_temp_c: float = 30.0
     supported_modes: tuple[str, ...] = ("AUTO", "COOL", "DRY", "FAN_ONLY")
-    supported_fan_speeds: tuple[str, ...] = ("SILENT", "LOW", "MEDIUM", "HIGH", "AUTO", "MAX")
+    supported_fan_speeds: tuple[str, ...] = ("AUTO", "SILENT", "LOW", "MEDIUM", "HIGH", "MAX")
     supported_swing_modes: tuple[str, ...] = ("OFF", "VERTICAL")
     supports_eco: bool = True
     supports_turbo: bool = True
@@ -203,9 +203,9 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     ]
     modes.append("FAN_ONLY")  # always available; not gated by a capability flag
     if caps.get("fan_custom"):
-        fan_speeds = ["SILENT", "LOW", "MEDIUM", "HIGH", "MAX", "AUTO"]
+        fan_speeds = ["AUTO", "SILENT", "LOW", "MEDIUM", "HIGH", "MAX"]
     else:
-        fan_speeds = [
+        fan_speeds = ["AUTO", *(
             name
             for name, present in (
                 ("SILENT", caps.get("fan_silent")),
@@ -214,8 +214,7 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
                 ("HIGH", caps.get("fan_high")),
             )
             if present
-        ]
-        fan_speeds.append("AUTO")
+        )]
     swings = ["OFF"]
     if caps.get("swing_vertical"):
         swings.append("VERTICAL")
@@ -682,8 +681,10 @@ class MideaSystem(System):
 
     def _row_b(self, u: MideaUnit, width: int) -> Line:
         """Fan speed (all options, current one highlighted) on the left;
-        Swing/Turbo toggles right-justified to match."""
-        left: Line = [Seg(_FIELD_INDENT)]
+        Swing/Turbo toggles right-justified to match. One extra space of
+        indent versus _row_a: "Fan" is one letter shorter than "Mode", so
+        this keeps the two rows' option lists starting in the same column."""
+        left: Line = [Seg(_FIELD_INDENT + " ")]
         left.extend(self._enum_chip("Fan", list(u.supported_fan_speeds), u.fan_speed))
         right: Line = list(self._toggle_chip("Swing", u.swing_mode != "OFF"))
         if u.supports_turbo:

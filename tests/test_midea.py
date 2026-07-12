@@ -204,7 +204,7 @@ def test_unit_from_device_maps_mode_fan_swing():
     assert u.fan_speed == "MEDIUM"
     assert u.swing_mode == "VERTICAL"
     assert u.supported_modes == ("AUTO", "COOL", "DRY", "FAN_ONLY")
-    assert u.supported_fan_speeds == ("SILENT", "LOW", "MEDIUM", "HIGH", "MAX", "AUTO")
+    assert u.supported_fan_speeds == ("AUTO", "SILENT", "LOW", "MEDIUM", "HIGH", "MAX")
     assert u.supported_swing_modes == ("OFF", "VERTICAL")
     assert u.supports_eco is True
     assert u.supports_turbo is True
