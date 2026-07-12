@@ -10,9 +10,11 @@ Split into:
     dict you can read with zero network I/O. Only the one-time cloud login
     (V3 token/key pairing) is ``async def`` — done via a single blocking
     ``asyncio.run(...)`` call, no dedicated event-loop thread needed.
-  * MideaSystem — the panel: one collapsed line per detected unit, and an
-    expanded cursor-navigable unit list with per-unit settings nested inline
-    under the selected row (mirrors HueSystem's device dialog).
+  * MideaSystem — the panel: every unit (online or not) is always fully
+    expanded as a 3-line card. ↕ picks which *online* unit hotkeys act on;
+    p/m/f/s/e/t/d directly toggle/cycle that unit's fields; ←→ nudges its
+    target temperature. No Hue-style drill-in dialog — there are only ever a
+    handful of AC units, so everything fits on screen at once.
 
 Set HOME_CONTROL_MOCK=1 to render 3 fixture units with no network at all.
 
@@ -35,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import curses
+import dataclasses
 import json
 import os
 import textwrap
@@ -80,6 +83,13 @@ _SWING_TO_BOOLS = {"OFF": (False, False), "VERTICAL": (True, False), "HORIZONTAL
 _BOOLS_TO_SWING = {v: k for k, v in _SWING_TO_BOOLS.items()}
 
 _MODE_LABEL = {"COOL": "COOL", "DRY": "DRY", "AUTO": "AUTO", "FAN_ONLY": "FAN"}
+# api_key -> MideaUnit field name, for mock mode's apply_edit (see below) —
+# identical for every field except target_temperature, which needs its own
+# °F/°C conversion and so is handled separately.
+_API_KEY_TO_UNIT_FIELD = {
+    "power_state": "power", "operational_mode": "mode", "fan_speed": "fan_speed",
+    "swing_mode": "swing_mode", "eco": "eco", "turbo": "turbo", "display_on": "display_on",
+}
 _FIELD_INDENT = "    "
 _STATUS_WRAP_LINES = 4  # max wrapped lines for a "no units"/error message
 
@@ -120,26 +130,22 @@ class MideaUnit:
 
 @dataclass
 class EditableField:
-    """One editable row in the per-unit dialog. ``field_type`` drives both how
-    the value renders and how ←/→/ENTER mutate it: bool toggles, int/float
-    steps by ``step`` (and accepts typed entry), enum cycles a list (held in
-    ``step``)."""
+    """Transport for one field edit, passed to MideaController.apply_edit:
+    which attribute to change, its new value, and enough type info
+    (``field_type``) for the dispatch there."""
     name: str
     api_key: str
     value: Any
-    min_val: Any = None
-    max_val: Any = None
-    step: Any = None
-    field_type: str = "info"  # "bool" | "int" | "float" | "enum"
+    field_type: str = "info"  # "bool" | "int" | "enum"
 
 
 def unit_badge(u: MideaUnit) -> tuple[str, str]:
     """(badge text, color) for a unit's status dot: colored accent + mode word
     when actively conditioning, grey "FAN" for fan-only, dim grey (no word)
-    for off or unreachable. Deliberately not Router's red-for-offline
+    for off, "????" for unreachable. Deliberately not Router's red-for-offline
     convention — off/unreachable read as calm grey here, not alarming."""
     if not u.online:
-        return "● unreachable", "light_grey"
+        return "● ????", "light_grey"
     if not u.power:
         return "●", "light_grey"
     if u.mode == "FAN_ONLY":
@@ -348,6 +354,7 @@ class MideaController:
                 self._last_connect_error = str(e) or type(e).__name__
 
         connected_any = False
+        responded_ips = {d["ip_address"] for d in raw.values()}
         for did in new_ids:
             d = raw[did]
             dev: MideaACDevice | None = None
@@ -372,8 +379,29 @@ class MideaController:
                 self._devices[did] = dev
                 self._ips[did] = d["ip_address"]
                 connected_any = True
-            elif not self._last_connect_error:
-                self._last_connect_error = f"{d['ip_address']} did not respond to pairing"
+                # Drop any stale synthetic placeholder this IP had before we
+                # ever got a real device_id for it (see the pinned loop below).
+                for stale_id in [uid for uid, u in self._units.items() if uid < 0 and u.ip == d["ip_address"]]:
+                    del self._units[stale_id]
+            else:
+                # Responded to the UDP broadcast (so we have a real device_id)
+                # but pairing failed — still show a dimmed placeholder card
+                # rather than vanishing entirely.
+                self._units[did] = MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or "", online=False)
+                if not self._last_connect_error:
+                    self._last_connect_error = f"{d['ip_address']} did not respond to pairing"
+
+        # Pinned entries that gave no UDP reply at all this pass — no real
+        # device_id to key off, so use a stable synthetic one (position in
+        # the config list) as long as we've never actually connected them.
+        # Only pinned entries get this treatment: a broadcast-only unit we've
+        # genuinely never heard from has nothing to remember it by.
+        for i, p in enumerate(self._pinned):
+            ip = p["ip"]
+            if ip in responded_ips or any(u.ip == ip for u in self._units.values()):
+                continue
+            placeholder_id = -(1000 + i)
+            self._units[placeholder_id] = MideaUnit(id=placeholder_id, ip=ip, name=p.get("name") or ip, online=False)
 
         if connected_any:
             with self._lock:
@@ -409,12 +437,6 @@ class MideaController:
         with self._lock:
             return dict(self._units)
 
-    def toggle_power(self, unit_id: int) -> None:
-        u = self._units.get(unit_id)
-        if u is None:
-            return
-        self.apply_edit(unit_id, EditableField("power", "power_state", not u.power, field_type="bool"))
-
     def apply_edit(self, unit_id: int, fld: EditableField) -> None:
         """Push one edited field to the live device and mirror the result into
         the cache. midea-local's setters are fire-and-forget at the protocol
@@ -422,6 +444,9 @@ class MideaController:
         thread once it parses the ack) — sleep a short settle delay, then
         rebuild the cached MideaUnit from the device's *actual* current
         state, never optimistically."""
+        if self.mock:
+            self._apply_edit_mock(unit_id, fld)
+            return
         dev = self._devices.get(unit_id)
         if dev is None:
             return
@@ -450,6 +475,24 @@ class MideaController:
         time.sleep(EDIT_SETTLE_DELAY)
         with self._lock:
             self._units[unit_id] = _unit_from_device(dev, self._ips.get(unit_id, ""))
+
+    def _apply_edit_mock(self, unit_id: int, fld: EditableField) -> None:
+        """Mock mode has no real device to push a command to — mutate the
+        fixture directly instead, so hotkeys are actually interactive when
+        developing/demoing against HOME_CONTROL_MOCK=1."""
+        prev = self._units.get(unit_id)
+        if prev is None:
+            return
+        if fld.api_key == "target_temperature":
+            value = _f_to_c(fld.value) if prev.fahrenheit else float(fld.value)
+            with self._lock:
+                self._units[unit_id] = dataclasses.replace(prev, target_temp_c=value)
+            return
+        field_name = _API_KEY_TO_UNIT_FIELD.get(fld.api_key)
+        if field_name is None:
+            return
+        with self._lock:
+            self._units[unit_id] = dataclasses.replace(prev, **{field_name: fld.value})
 
     # -- mock fixtures -----------------------------------------------------
     def _load_mock(self) -> None:
@@ -481,9 +524,6 @@ class MideaController:
 
 
 _CHIP_LABEL = {"FAN_ONLY": "FAN", "SILENT": "SIL", "MEDIUM": "MED", "VERTICAL": "VERT", "HORIZONTAL": "HORIZ"}
-_HEADER_KEYS = ("power_state", "target_temperature")
-_ROW2_KEYS = ("operational_mode", "fan_speed")
-_ROW3_KEYS = ("swing_mode", "eco", "turbo", "display_on")
 
 
 def _chip_label(opt: str) -> str:
@@ -491,22 +531,23 @@ def _chip_label(opt: str) -> str:
 
 
 class MideaSystem(System):
-    """Every online unit is always fully expanded — a 3-line card (header
-    with power/temp, a mode/fan row, a swing/eco/turbo/display row) rather
-    than a Hue-style collapsed list + drill-in dialog, since there are only
-    ever a handful of AC units. A single flat cursor walks every editable
-    control of every unit in top-to-bottom, left-to-right order; ↕ moves it,
-    ←→ adjusts the focused control in place, exactly like Hue's dialog did —
-    just with no separate "open" step."""
+    """Every unit (online or not) is always fully expanded as a 3-line card:
+    a header (badge/name/temp) and two control rows. Only the *current*
+    value of each field is shown — not every option — so hotkeys can act
+    directly on a field without a separate "select it first" step: ↕ (or
+    j/k) picks which *online* unit p/m/f/s/e/t/d act on, ←→ nudges its
+    target temperature, and each hotkey's letter is always the field
+    label's first letter, colored as a standing mnemonic. Offline units
+    still render their full (last-known or default) card, entirely dimmed —
+    just not selectable, since there's nothing live to command."""
 
     name = "Midea AC"
     color_key = "midea"
 
     def __init__(self) -> None:
         self.ctl = MideaController()
-        self.cursor = 0  # flat index across every online unit's control list
+        self.selected = 0  # index into _online_units()
         self.scroll = 0
-        self._unit_fields: dict[int, list[EditableField]] = {}
         self._num_buf: str | None = None
 
     @property
@@ -524,22 +565,12 @@ class MideaSystem(System):
 
     def poll(self, focused: bool) -> None:
         self.ctl.poll(focused)
-        if self._num_buf is not None:
-            return  # don't yank the field out from under an in-progress numeric entry
-        for u in self._units():
-            if u.online:
-                self._unit_fields[u.id] = self._build_fields(u)
-            else:
-                self._unit_fields.pop(u.id, None)
 
     def _units(self) -> list[MideaUnit]:
         return sorted(self.ctl.snapshot().values(), key=lambda u: u.name.lower())
 
-    def _flat(self) -> list[tuple[MideaUnit, int]]:
-        out: list[tuple[MideaUnit, int]] = []
-        for u in self._units():
-            out.extend((u, i) for i in range(len(self._unit_fields.get(u.id, []))))
-        return out
+    def _online_units(self) -> list[MideaUnit]:
+        return [u for u in self._units() if u.online]
 
     def _clamp_scroll(self, total: int, focus: int, visible: int) -> None:
         if focus < self.scroll:
@@ -548,7 +579,7 @@ class MideaSystem(System):
             self.scroll = focus - visible + 1
         self.scroll = max(0, min(self.scroll, max(0, total - visible)))
 
-    # -- rendering -----------------------------------------------------
+    # -- rendering (small/unfocused box) --------------------------------
     def collapsed_lines(self, width: int) -> list[Line]:
         units = self._units()
         if not units:
@@ -567,6 +598,7 @@ class MideaSystem(System):
         right = [Seg(f"{cur} → {tgt}   {u.fan_speed.replace('_', ' ').title()}", dim=True)]
         return justify(left, right, width)
 
+    # -- rendering (expanded/focused box) --------------------------------
     def render_expanded(self, region: Region) -> None:
         units = self._units()
         if not units:
@@ -577,134 +609,130 @@ class MideaSystem(System):
                     break
                 region.text(i, 0, line, dim=True)
             return
-        flat = self._flat()
-        if flat:
-            self.cursor = max(0, min(self.cursor, len(flat) - 1))
-        rows, focus = self._all_rows(units, flat, region.width)
-        self._clamp_scroll(len(rows), focus, region.height)
+        online = self._online_units()
+        selected_id = None
+        if online:
+            self.selected = max(0, min(self.selected, len(online) - 1))
+            selected_id = online[self.selected].id
+        rows: list[Line] = []
+        focus_row = 0
+        for u in units:
+            is_selected = u.id == selected_id
+            card = self._card_rows(u, is_selected, region.width)
+            if is_selected:
+                focus_row = len(rows)
+            rows.extend(card)
+            rows.append([])  # blank separator between cards
+        if rows:
+            rows.pop()
+        self._clamp_scroll(len(rows), focus_row, region.height)
         for i in range(region.height):
             idx = self.scroll + i
             if idx >= len(rows):
                 break
             region.segs(i, rows[idx])
 
-    def _all_rows(self, units: list[MideaUnit], flat: list[tuple[MideaUnit, int]], width: int) -> tuple[list[Line], int]:
-        cur_unit_id = flat[self.cursor][0].id if flat else None
-        rows: list[Line] = []
-        focus_row = 0
-        for u in units:
-            fields = self._unit_fields.get(u.id, [])
-            focused_idx = flat[self.cursor][1] if u.id == cur_unit_id else -1
-            card, card_focus = self._card_rows(u, fields, focused_idx, width)
-            if u.id == cur_unit_id:
-                focus_row = len(rows) + card_focus
-            rows.extend(card)
-            rows.append([])  # blank separator between cards
-        if rows:
-            rows.pop()
-        return rows, focus_row
-
-    def _card_rows(self, u: MideaUnit, fields: list[EditableField], focused_idx: int, width: int) -> tuple[list[Line], int]:
-        by_key = {f.api_key: f for f in fields}
-        focused_key = fields[focused_idx].api_key if 0 <= focused_idx < len(fields) else None
-        header = self._header_row(u, by_key, focused_key, width)
-        if not u.online or not fields:
-            return [header], 0
-        row2 = self._chip_row([by_key[k] for k in _ROW2_KEYS if k in by_key], focused_key)
-        row3 = self._chip_row([by_key[k] for k in _ROW3_KEYS if k in by_key], focused_key)
-        if focused_key in _HEADER_KEYS:
-            focus = 0
-        elif focused_key in _ROW2_KEYS:
-            focus = 1
-        else:
-            focus = 2
-        return [header, row2, row3], focus
-
-    def _header_row(self, u: MideaUnit, by_key: dict[str, EditableField], focused_key: str | None, width: int) -> Line:
-        label, color = unit_badge(u)
-        left: Line = [Seg(label, color, bold=(color == "midea_teal")), Seg(f"  {u.name}")]
-        power = by_key.get("power_state")
-        if power is not None:
-            is_f = focused_key == "power_state"
-            chip = f"[{'ON' if power.value else 'OFF'}]" if is_f else ("ON" if power.value else "off")
-            left.append(Seg(f"  {chip}", self.color if is_f else "", bold=is_f, dim=not (is_f or power.value)))
+    def _card_rows(self, u: MideaUnit, is_selected: bool, width: int) -> list[Line]:
+        header = self._header_row(u, is_selected, width)
+        row_a = self._row_a(u)
+        row_b = self._row_b(u)
         if not u.online:
-            return left
+            return [self._dim(header), self._dim(row_a), self._dim(row_b)]
+        return [header, row_a, row_b]
+
+    @staticmethod
+    def _dim(line: Line) -> Line:
+        return [Seg(s.text, "", dim=True) for s in line]
+
+    def _header_row(self, u: MideaUnit, is_selected: bool, width: int) -> Line:
+        label, color = unit_badge(u)
+        cursor = Seg("▶ ", self.color, bold=True) if is_selected else Seg("  ")
+        if not u.online:
+            return [cursor, Seg(label, color), Seg(f"  {u.name} (unreachable)")]
+        left: Line = [cursor, Seg(label, color, bold=(color == "midea_teal")), Seg(f"  {u.name}")]
         right: Line = []
         if u.filter_alert:
             right.append(Seg("filter!  ", "yellow"))
         if u.error_code:
             right.append(Seg(f"err {u.error_code}  ", "yellow"))
-        temp = by_key.get("target_temperature")
-        if temp is not None:
-            is_f = focused_key == "target_temperature"
-            cur = _fmt_temp(u.indoor_temp_c, u.fahrenheit)
-            unit_suffix = "F" if u.fahrenheit else "C"
-            if self._num_buf is not None and is_f:
-                tgt = f"[{self._num_buf}_]"
-            elif is_f:
-                tgt = f"[{temp.value}°{unit_suffix}]"
-            else:
-                tgt = f"{temp.value}°{unit_suffix}"
-            right.append(Seg(f"{cur} → ", dim=True))
-            right.append(Seg(tgt, self.color if is_f else "", bold=is_f))
-        return justify(left, right, width) if right else left
+        if self._num_buf is not None and is_selected:
+            tgt_text = f"{self._num_buf}_"
+        else:
+            tgt_text = _fmt_temp(u.target_temp_c, u.fahrenheit)
+        right.append(Seg(f"{_fmt_temp(u.indoor_temp_c, u.fahrenheit)} → ", dim=True))
+        right.append(Seg(tgt_text, self.color if is_selected else "", bold=is_selected))
+        return justify(left, right, width)
 
-    def _chip_row(self, fields: list[EditableField], focused_key: str | None) -> Line:
-        if not fields:
-            return []
+    def _row_a(self, u: MideaUnit) -> Line:
+        """Power, Mode (all options, current one highlighted), Eco, Display."""
         segs: Line = [Seg(_FIELD_INDENT)]
-        for gi, fld in enumerate(fields):
-            if gi > 0:
-                segs.append(Seg("   "))
-            is_f = fld.api_key == focused_key
-            segs.append(Seg(f"{fld.name.title()} ", dim=True))
-            if fld.field_type == "enum":
-                for opt in fld.step:
-                    label = _chip_label(opt)
-                    text = f"[{label}]" if opt == fld.value else label
-                    color = self.color if (is_f and opt == fld.value) else ""
-                    segs.append(Seg(text, color, bold=(is_f and opt == fld.value), dim=(opt != fld.value)))
-                    segs.append(Seg(" "))
-            else:  # bool toggle
-                dot = "●" if fld.value else "○"
-                text = f"[{dot}]" if is_f else dot
-                segs.append(Seg(text, self.color if is_f else "", bold=is_f, dim=not (is_f or fld.value)))
+        segs.extend(self._power_chip(u.power))
+        segs.append(Seg("     "))
+        segs.extend(self._enum_chip("Mode", list(u.supported_modes), u.mode))
+        if u.supports_eco:
+            segs.append(Seg("       "))
+            segs.extend(self._toggle_chip("Eco", u.eco))
+        if u.supports_display_control:
+            segs.append(Seg("   "))
+            segs.extend(self._toggle_chip("Displ", u.display_on))
         return segs
 
-    # -- fields ----------------------------------------------------------
-    def _build_fields(self, u: MideaUnit) -> list[EditableField]:
-        if u.fahrenheit:
-            cur_t, min_t, max_t = round(_c_to_f(u.target_temp_c)), round(_c_to_f(u.min_temp_c)), round(_c_to_f(u.max_temp_c))
-        else:
-            cur_t, min_t, max_t = round(u.target_temp_c), round(u.min_temp_c), round(u.max_temp_c)
-        fields = [
-            EditableField("power", "power_state", u.power, field_type="bool"),
-            EditableField("temp", "target_temperature", cur_t, min_t, max_t, 1, "int"),
-            EditableField("mode", "operational_mode", u.mode, step=list(u.supported_modes), field_type="enum"),
-            EditableField("fan", "fan_speed", u.fan_speed, step=list(u.supported_fan_speeds), field_type="enum"),
-            EditableField("swing", "swing_mode", u.swing_mode, step=list(u.supported_swing_modes), field_type="enum"),
-        ]
-        if u.supports_eco:
-            fields.append(EditableField("eco", "eco", u.eco, field_type="bool"))
+    def _row_b(self, u: MideaUnit) -> Line:
+        """Fan speed (all options, current one highlighted), Swing, Turbo."""
+        segs: Line = [Seg(_FIELD_INDENT)]
+        segs.extend(self._enum_chip("Fan speed", list(u.supported_fan_speeds), u.fan_speed))
+        segs.append(Seg("     "))
+        segs.extend(self._toggle_chip("Swing", u.swing_mode != "OFF"))
         if u.supports_turbo:
-            fields.append(EditableField("turbo", "turbo", u.turbo, field_type="bool"))
-        if u.supports_display_control:
-            fields.append(EditableField("display", "display_on", u.display_on, field_type="bool"))
-        return fields
+            segs.append(Seg("   "))
+            segs.extend(self._toggle_chip("Turbo", u.turbo))
+        return segs
+
+    def _enum_chip(self, label: str, options: list[str], current: str) -> Line:
+        """``label``'s first letter is always the accent-colored mnemonic;
+        every option is listed, with the current one highlighted — not
+        bracketed, so the row's width never jitters as it changes."""
+        segs: Line = [Seg(label[0], self.color, bold=True), Seg(f"{label[1:]} ", dim=True)]
+        for i, opt in enumerate(options):
+            if i > 0:
+                segs.append(Seg(" "))
+            disp = _chip_label(opt)
+            segs.append(Seg(disp, self.color if opt == current else "", bold=(opt == current), dim=(opt != current)))
+        return segs
+
+    def _toggle_chip(self, label: str, value: bool) -> Line:
+        """Mnemonic first letter always colored; the whole chip goes bold/
+        accent when ``value`` is True (the "enabled" state stands out on its
+        own, independent of which unit is currently selected)."""
+        dot = "●" if value else "○"
+        if value:
+            return [Seg(f"{label} {dot}", self.color, bold=True)]
+        return [Seg(label[0], self.color, bold=True), Seg(f"{label[1:]} {dot}", dim=True)]
+
+    def _power_chip(self, value: bool) -> Line:
+        """Same mnemonic/highlight convention as _toggle_chip, but "on"/"off"
+        text instead of a dot — Power is the one field worth spelling out."""
+        state = "on" if value else "off"
+        if value:
+            return [Seg(f"Power {state}", self.color, bold=True)]
+        return [Seg("P", self.color, bold=True), Seg(f"ower {state}", dim=True)]
 
     # -- toolbar/help --------------------------------------------------
     def toolbar(self) -> str:
         if self._num_buf is not None:
-            return "type value   ENTER set   ESC cancel"
-        return "↕ nav   ←→ adjust   ENTER edit/toggle"
+            return "type temp   ENTER set   ESC cancel"
+        return "↕ select   ←→ temp   (p)ower (m)ode (f)an (s)wing (e)co (t)urbo (d)isplay"
 
     def toolbar_line(self) -> Line | None:
         if self._num_buf is not None:
-            return hint_row(hint("type", "value", self.color), hint("ENTER", "set", self.color),
+            return hint_row(hint("type", "temp", self.color), hint("ENTER", "set", self.color),
                             hint("ESC", "cancel", self.color))
         return hint_row(
-            hint("↕", "nav", self.color), hint("←→", "adjust", self.color), hint("ENTER", "edit/toggle", self.color),
+            hint("↕", "select", self.color), hint("←→", "temp", self.color),
+            hint("p", "ower", self.color, paren=True), hint("m", "ode", self.color, paren=True),
+            hint("f", "an", self.color, paren=True), hint("s", "wing", self.color, paren=True),
+            hint("e", "co", self.color, paren=True), hint("t", "urbo", self.color, paren=True),
+            hint("d", "isplay", self.color, paren=True),
         )
 
     def help_notes(self) -> list[str]:
@@ -715,56 +743,72 @@ class MideaSystem(System):
 
     # -- input -----------------------------------------------------------
     def handle_key(self, key: int) -> bool:
+        online = self._online_units()
         if self._num_buf is not None:
-            return self._handle_num_entry(key)
-        flat = self._flat()
-        if not flat:
-            return False
-        self.cursor = max(0, min(self.cursor, len(flat) - 1))
+            return self._handle_num_entry(key, online)
         if key in (curses.KEY_UP, ord("k")):
-            self.cursor = max(0, self.cursor - 1)
-        elif key in (curses.KEY_DOWN, ord("j")):
-            self.cursor = min(len(flat) - 1, self.cursor + 1)
-        elif key in (curses.KEY_LEFT, ord("h")):
-            self._step(flat, -1)
+            self.selected = max(0, self.selected - 1)
+            return True
+        if key in (curses.KEY_DOWN, ord("j")):
+            self.selected = min(max(0, len(online) - 1), self.selected + 1)
+            return True
+        if not online:
+            return False
+        self.selected = max(0, min(self.selected, len(online) - 1))
+        u = online[self.selected]
+        if key in (curses.KEY_LEFT, ord("h")):
+            self._step_temp(u, -1)
         elif key in (curses.KEY_RIGHT, ord("l")):
-            self._step(flat, 1)
-        elif key in (ord("\n"), curses.KEY_ENTER):
-            self._enter(flat)
+            self._step_temp(u, 1)
+        elif key in (ord("\n"), curses.KEY_ENTER, ord("p")):
+            self._toggle(u, "power_state", u.power)
+        elif key == ord("m"):
+            self._cycle(u, "operational_mode", list(u.supported_modes), u.mode)
+        elif key == ord("f"):
+            self._cycle(u, "fan_speed", list(u.supported_fan_speeds), u.fan_speed)
+        elif key == ord("s"):
+            self._toggle_swing(u)
+        elif key == ord("e") and u.supports_eco:
+            self._toggle(u, "eco", u.eco)
+        elif key == ord("t") and u.supports_turbo:
+            self._toggle(u, "turbo", u.turbo)
+        elif key == ord("d") and u.supports_display_control:
+            self._toggle(u, "display_on", u.display_on)
+        elif ord("0") <= key <= ord("9"):
+            self._num_buf = chr(key)
         else:
             return False
         return True
 
-    def _current(self, flat: list[tuple[MideaUnit, int]]) -> tuple[MideaUnit, EditableField]:
-        u, i = flat[self.cursor]
-        return u, self._unit_fields[u.id][i]
+    def _toggle(self, u: MideaUnit, api_key: str, current: bool) -> None:
+        self.ctl.apply_edit(u.id, EditableField(api_key, api_key, not current, field_type="bool"))
 
-    def _step(self, flat: list[tuple[MideaUnit, int]], direction: int) -> None:
-        u, fld = self._current(flat)
-        if fld.field_type == "bool":
-            fld.value = not fld.value
-        elif fld.field_type in ("int", "float"):
-            nv = fld.value + direction * fld.step
-            nv = min(fld.max_val, max(fld.min_val, nv))
-            fld.value = round(nv, 4) if fld.field_type == "float" else nv
-        elif fld.field_type == "enum":
-            fld.value = self._cycle_enum(fld, direction)
-        self.ctl.apply_edit(u.id, fld)
+    def _cycle(self, u: MideaUnit, api_key: str, options: list[str], current: str) -> None:
+        if not options:
+            return
+        idx = options.index(current) if current in options else 0
+        new_val = options[(idx + 1) % len(options)]
+        self.ctl.apply_edit(u.id, EditableField(api_key, api_key, new_val, field_type="enum"))
 
-    def _enter(self, flat: list[tuple[MideaUnit, int]]) -> None:
-        u, fld = self._current(flat)
-        if fld.field_type == "bool":
-            fld.value = not fld.value
-            self.ctl.apply_edit(u.id, fld)
-        elif fld.field_type in ("int", "float"):
-            self._num_buf = ""
-        elif fld.field_type == "enum":
-            fld.value = self._cycle_enum(fld, 1)
-            self.ctl.apply_edit(u.id, fld)
+    def _toggle_swing(self, u: MideaUnit) -> None:
+        others = [o for o in u.supported_swing_modes if o != "OFF"]
+        new_val = "OFF" if u.swing_mode != "OFF" else (others[0] if others else "OFF")
+        self.ctl.apply_edit(u.id, EditableField("swing_mode", "swing_mode", new_val, field_type="enum"))
 
-    def _handle_num_entry(self, key: int) -> bool:
-        flat = self._flat()
-        u, fld = self._current(flat)
+    def _step_temp(self, u: MideaUnit, direction: int) -> None:
+        if u.fahrenheit:
+            cur, lo, hi = round(_c_to_f(u.target_temp_c)), round(_c_to_f(u.min_temp_c)), round(_c_to_f(u.max_temp_c))
+        else:
+            cur, lo, hi = round(u.target_temp_c), round(u.min_temp_c), round(u.max_temp_c)
+        new_val = min(hi, max(lo, cur + direction))
+        self.ctl.apply_edit(u.id, EditableField("target_temperature", "target_temperature", new_val, field_type="int"))
+
+    def _handle_num_entry(self, key: int, online: list[MideaUnit]) -> bool:
+        if not online:
+            self._num_buf = None
+            return False
+        self.selected = max(0, min(self.selected, len(online) - 1))
+        u = online[self.selected]
         buf = self._num_buf or ""
         if key == 27:  # ESC — cancel
             self._num_buf = None
@@ -772,27 +816,22 @@ class MideaSystem(System):
             self._num_buf = None
             if buf:
                 try:
-                    val: Any = float(buf) if fld.field_type == "float" else int(buf)
-                    val = min(fld.max_val, max(fld.min_val, val))
-                    fld.value = round(val, 4) if fld.field_type == "float" else val
-                    self.ctl.apply_edit(u.id, fld)
+                    val = int(buf)
+                    if u.fahrenheit:
+                        lo, hi = round(_c_to_f(u.min_temp_c)), round(_c_to_f(u.max_temp_c))
+                    else:
+                        lo, hi = round(u.min_temp_c), round(u.max_temp_c)
+                    val = min(hi, max(lo, val))
+                    self.ctl.apply_edit(
+                        u.id, EditableField("target_temperature", "target_temperature", val, field_type="int")
+                    )
                 except ValueError:
                     pass
         elif key in (curses.KEY_BACKSPACE, 127, 8):
             self._num_buf = buf[:-1]
         elif ord("0") <= key <= ord("9"):
             self._num_buf = buf + chr(key)
-        elif key == ord(".") and fld.field_type == "float" and "." not in buf:
-            self._num_buf = buf + "."
         return True
-
-    def _cycle_enum(self, fld: EditableField, direction: int) -> Any:
-        options: list[str] = fld.step
-        try:
-            idx = options.index(fld.value)
-        except ValueError:
-            idx = 0
-        return options[(idx + direction) % len(options)]
 
     # -- voice control -----------------------------------------------------
     def voice_actions(self) -> list[VoiceAction]:

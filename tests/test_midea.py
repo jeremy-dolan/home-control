@@ -54,7 +54,7 @@ def test_unit_badge_off():
 def test_unit_badge_unreachable():
     u = _unit(online=False)
     label, color = midea.unit_badge(u)
-    assert "unreachable" in label
+    assert label == "● ????"
     assert color == "light_grey"
 
 
@@ -112,51 +112,63 @@ def test_system_collapsed_lines_before_discovery():
     assert len(lines) == 1
 
 
-def test_flat_cursor_cycle_mode(mock_env):
+def test_hotkey_cycles_mode(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    flat = s._flat()
-    mode_idx = next(i for i, (u, fi) in enumerate(flat) if s._unit_fields[u.id][fi].api_key == "operational_mode")
-    s.cursor = mode_idx
-    unit, field_idx = flat[mode_idx]
-    unit_id = unit.id
-    fld = s._unit_fields[unit_id][field_idx]
-    before = fld.value
-    assert s.handle_key(curses.KEY_RIGHT) is True
-    after = s._unit_fields[unit_id][field_idx].value
+    online = s._online_units()
+    u = online[s.selected]
+    before = u.mode
+    assert s.handle_key(ord("m")) is True
+    after = s.ctl.snapshot()[u.id].mode
     assert after != before
-    assert after in fld.step
+    assert after in u.supported_modes
 
 
-def test_flat_cursor_spans_multiple_units(mock_env):
+def test_hotkey_toggles_eco(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    flat = s._flat()
-    unit_ids = {u.id for u, _ in flat}
-    assert len(unit_ids) >= 2  # Living Room + Bedroom are both online in the mock fixture
-    s.cursor = 0
-    first_unit = flat[0][0].id
-    for _ in range(len(s._unit_fields[first_unit])):
+    u = s._online_units()[s.selected]
+    before = u.eco
+    assert s.handle_key(ord("e")) is True
+    assert s.ctl.snapshot()[u.id].eco != before
+
+
+def test_hotkey_toggles_swing(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    u = s._online_units()[s.selected]
+    was_off = u.swing_mode == "OFF"
+    assert s.handle_key(ord("s")) is True
+    after = s.ctl.snapshot()[u.id].swing_mode
+    assert (after == "OFF") != was_off
+
+
+def test_updown_selects_only_online_units(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    online_ids = {u.id for u in s._online_units()}
+    assert len(online_ids) >= 2  # Living Room + Bedroom are both online in the mock fixture
+    seen = set()
+    s.selected = 0
+    for _ in range(len(online_ids)):
+        seen.add(s._online_units()[s.selected].id)
         s.handle_key(curses.KEY_DOWN)
-    flat2 = s._flat()
-    assert flat2[s.cursor][0].id != first_unit
+    assert seen == online_ids  # never lands on the offline Office unit
 
 
-def test_numeric_entry_sets_target_temp(mock_env):
+def test_digit_key_starts_numeric_temp_entry_and_commits(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    flat = s._flat()
-    temp_idx = next(i for i, (u, fi) in enumerate(flat) if s._unit_fields[u.id][fi].api_key == "target_temperature")
-    s.cursor = temp_idx
-    unit, field_idx = flat[temp_idx]
-    unit_id = unit.id
-    assert s.handle_key(ord("\n")) is True  # ENTER on an int field starts numeric entry
-    assert s._num_buf == ""
-    for ch in "70":
-        s.handle_key(ord(ch))
+    u = s._online_units()[s.selected]
+    assert s.handle_key(ord("7")) is True  # any digit starts entry, no ENTER needed first
+    assert s._num_buf == "7"
+    assert s.handle_key(ord("0")) is True
+    assert s._num_buf == "70"
     assert s.handle_key(ord("\n")) is True  # commit
     assert s._num_buf is None
-    assert s._unit_fields[unit_id][field_idx].value == 70
+    after = s.ctl.snapshot()[u.id]
+    expected = 70 if after.fahrenheit else round(midea._f_to_c(70))
+    assert round(midea._c_to_f(after.target_temp_c) if after.fahrenheit else after.target_temp_c) == expected
 
 
 # --- backend mapping tables (midea-local int<->string encodings) -----------------
