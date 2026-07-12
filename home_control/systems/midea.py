@@ -721,22 +721,21 @@ class MideaSystem(System):
     def toolbar(self) -> str:
         if self._num_buf is not None:
             return "type temp   ENTER set   ESC cancel"
-        return "↕ select   ←→ temp   (p)ower (m)ode (f)an (s)wing (e)co (t)urbo (d)isplay"
+        return "↕ select device   ←→ temp   ENTER power"
 
     def toolbar_line(self) -> Line | None:
         if self._num_buf is not None:
             return hint_row(hint("type", "temp", self.color), hint("ENTER", "set", self.color),
                             hint("ESC", "cancel", self.color))
         return hint_row(
-            hint("↕", "select", self.color), hint("←→", "temp", self.color),
-            hint("p", "ower", self.color, paren=True), hint("m", "ode", self.color, paren=True),
-            hint("f", "an", self.color, paren=True), hint("s", "wing", self.color, paren=True),
-            hint("e", "co", self.color, paren=True), hint("t", "urbo", self.color, paren=True),
-            hint("d", "isplay", self.color, paren=True),
+            hint("↕", "select device", self.color), hint("←→", "temp", self.color),
+            hint("ENTER", "power", self.color),
         )
 
     def help_notes(self) -> list[str]:
         return [
+            "Hotkeys act on the selected unit directly: p power, m mode, f fan speed,",
+            "s swing, e eco, t turbo, d display. Each field's colored letter is its key.",
             "Auto-discovers via LAN broadcast; pin IPs in [midea] units to skip it.",
             "V3 units need a one-time cloud pairing; the token is cached afterward.",
         ]
