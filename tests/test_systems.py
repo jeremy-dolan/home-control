@@ -62,6 +62,16 @@ def test_sonos_badge():
     assert sonos.badge("STOPPED") == ("■ STOPPED", "grey")
 
 
+def test_sonos_trunc():
+    assert sonos.trunc("hello", 10) == "hello"       # fits, unchanged
+    assert sonos.trunc("hello", 5) == "hello"         # exact fit, no marker
+    assert sonos.trunc("hello world", 8) == "hello..."
+    assert len(sonos.trunc("hello world", 8)) == 8
+    assert sonos.trunc("hello world", 3) == "..."     # too narrow for text + marker
+    assert sonos.trunc("hello world", 0) == ""
+    assert sonos.trunc("hello world", -1) == ""
+
+
 # --- Roku --------------------------------------------------------------------
 
 

@@ -112,7 +112,11 @@ def badge(transport_state: str) -> tuple[str, str]:
 def trunc(text: str, width: int) -> str:
     if width <= 0:
         return ""
-    return text if len(text) <= width else text[: max(0, width - 1)] + "…"
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return "." * width
+    return text[: width - 3] + "..."
 
 
 def volume_bar(vol: int, color: str = "", width: int = 12) -> Line:
@@ -735,7 +739,7 @@ class SonosSystem(System):
     def collapsed_lines(self, width: int) -> list[Line]:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
-            msg = self.ctl.error or "Discovering…"
+            msg = self.ctl.error or "Discovering..."
             return [[Seg(msg, dim=True)], [Seg("")]]
 
         zone = zones[active_idx]
@@ -770,7 +774,7 @@ class SonosSystem(System):
     def _render_main(self, region: Region) -> None:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
-            region.text(0, 0, self.ctl.error or "Discovering speakers…", dim=True)
+            region.text(0, 0, self.ctl.error or "Discovering speakers...", dim=True)
             return
 
         y = 0

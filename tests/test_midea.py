@@ -47,14 +47,14 @@ def test_unit_badge_fan_only():
 def test_unit_badge_off():
     u = _unit(power=False)
     label, color = midea.unit_badge(u)
-    assert label == "●"
+    assert label == "● OFF"
     assert color == "light_grey"
 
 
 def test_unit_badge_unreachable():
     u = _unit(online=False)
     label, color = midea.unit_badge(u)
-    assert "unreachable" in label
+    assert label == "● ????"
     assert color == "light_grey"
 
 
@@ -106,34 +106,69 @@ def test_system_collapsed_lines_one_row_per_unit(mock_env):
 
 
 def test_system_collapsed_lines_before_discovery():
-    # No mock env: no units yet, single "discovering…" line, not a crash.
+    # No mock env: no units yet, single "Discovering..." line, not a crash.
     s = midea.MideaSystem()
     lines = s.collapsed_lines(80)
     assert len(lines) == 1
 
 
-def test_dialog_open_and_cycle_mode(mock_env):
+def test_hotkey_cycles_mode(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    assert s.handle_key(ord("i")) is True
-    assert s.mode == "device"
-    mode_idx = next(i for i, f in enumerate(s.info_fields) if f.api_key == "operational_mode")
-    s.info_cursor = mode_idx
-    fld = s.info_fields[mode_idx]
-    before = fld.value
-    assert s.handle_key(curses.KEY_RIGHT) is True
-    after = s.info_fields[mode_idx].value
+    online = s._online_units()
+    u = online[s.selected]
+    before = u.mode
+    assert s.handle_key(ord("m")) is True
+    after = s.ctl.snapshot()[u.id].mode
     assert after != before
-    assert after in fld.step
+    assert after in u.supported_modes
 
 
-def test_dialog_close_returns_to_list(mock_env):
+def test_hotkey_toggles_eco(mock_env):
     s = midea.MideaSystem()
     s.poll(True)
-    s.handle_key(ord("i"))
-    assert s.mode == "device"
-    assert s.handle_key(27) is True  # ESC
-    assert s.mode == "list"
+    u = s._online_units()[s.selected]
+    before = u.eco
+    assert s.handle_key(ord("e")) is True
+    assert s.ctl.snapshot()[u.id].eco != before
+
+
+def test_hotkey_toggles_swing(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    u = s._online_units()[s.selected]
+    was_off = u.swing_mode == "OFF"
+    assert s.handle_key(ord("s")) is True
+    after = s.ctl.snapshot()[u.id].swing_mode
+    assert (after == "OFF") != was_off
+
+
+def test_updown_selects_only_online_units(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    online_ids = {u.id for u in s._online_units()}
+    assert len(online_ids) >= 2  # Living Room + Bedroom are both online in the mock fixture
+    seen = set()
+    s.selected = 0
+    for _ in range(len(online_ids)):
+        seen.add(s._online_units()[s.selected].id)
+        s.handle_key(curses.KEY_DOWN)
+    assert seen == online_ids  # never lands on the offline Office unit
+
+
+def test_digit_key_starts_numeric_temp_entry_and_commits(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    u = s._online_units()[s.selected]
+    assert s.handle_key(ord("7")) is True  # any digit starts entry, no ENTER needed first
+    assert s._num_buf == "7"
+    assert s.handle_key(ord("0")) is True
+    assert s._num_buf == "70"
+    assert s.handle_key(ord("\n")) is True  # commit
+    assert s._num_buf is None
+    after = s.ctl.snapshot()[u.id]
+    expected = 70 if after.fahrenheit else round(midea._f_to_c(70))
+    assert round(midea._c_to_f(after.target_temp_c) if after.fahrenheit else after.target_temp_c) == expected
 
 
 # --- backend mapping tables (midea-local int<->string encodings) -----------------
@@ -169,7 +204,7 @@ def test_unit_from_device_maps_mode_fan_swing():
     assert u.fan_speed == "MEDIUM"
     assert u.swing_mode == "VERTICAL"
     assert u.supported_modes == ("AUTO", "COOL", "DRY", "FAN_ONLY")
-    assert u.supported_fan_speeds == ("SILENT", "LOW", "MEDIUM", "HIGH", "MAX", "AUTO")
+    assert u.supported_fan_speeds == ("AUTO", "SILENT", "LOW", "MEDIUM", "HIGH", "MAX")
     assert u.supported_swing_modes == ("OFF", "VERTICAL")
     assert u.supports_eco is True
     assert u.supports_turbo is True
