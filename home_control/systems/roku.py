@@ -429,7 +429,7 @@ _DPAD_GLYPHS = [(1, 7, "↑"), (3, 2, "←"), (3, 6, "OK⏎"), (3, 12, "→"), (
 _SYSTEM_KEYS = [
     ("h", "⌂ Home"),
     ("⌫", "◀ Back"),
-    ("i", "✶ Options"),
+    ("*", "✶ Options"),
     ("P", "⏻ Power"),
     ("/", "⌕ Search"),
     ("F", "⌖ Find remote"),
@@ -712,7 +712,7 @@ class RokuSystem(System):
             ctl.key("Back")
         elif key == ord("h"):
             ctl.key("Home")
-        elif key == ord("i"):
+        elif key == ord("*"):  # matches the ✶ button label on the physical remote
             ctl.key("Info")
         elif key == ord("p"):
             ctl.key("Play")
