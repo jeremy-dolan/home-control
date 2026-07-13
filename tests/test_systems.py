@@ -83,9 +83,9 @@ def test_fmt_ms():
 
 
 def test_roku_badge():
-    assert roku.badge("play")[0].startswith("▶")
-    assert roku.badge("pause")[0].startswith("⏸")
-    assert roku.badge("close") == ("■ IDLE", "")
+    assert roku.badge("play") == ("▶ PLAYING", False)   # bright accent
+    assert roku.badge("pause") == ("⏸ PAUSED", True)    # dimmed accent
+    assert roku.badge("close") == ("■ IDLE", False)
 
 
 def _mock_roku(monkeypatch):

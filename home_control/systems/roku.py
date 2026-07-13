@@ -59,11 +59,11 @@ APP_SHORTCUTS = {
     "A": ("551012", "Apple TV"),
 }
 
-# PLAYING deliberately has no semantic colour: "" falls back to the bold Roku
-# accent (bright purple) where the badge is drawn, same as IDLE.
+# Badge label + dim flag. Every state renders in the Roku accent: bright/bold
+# for PLAYING and IDLE, dimmed for PAUSED — no semantic colors here.
 _BADGE = {
-    "play": ("▶ PLAYING", ""),
-    "pause": ("⏸ PAUSED", "yellow"),
+    "play": ("▶ PLAYING", False),
+    "pause": ("⏸ PAUSED", True),
 }
 
 # Voice button name -> ECP keypress.
@@ -76,8 +76,9 @@ _VOICE_KEYS = {
 }
 
 
-def badge(state: str) -> tuple[str, str]:
-    return _BADGE.get(state, ("■ IDLE", ""))
+def badge(state: str) -> tuple[str, bool]:
+    """(label, dim) for a media-player state; unknown/idle states get IDLE."""
+    return _BADGE.get(state, ("■ IDLE", False))
 
 
 # ---------------------------------------------------------------------------
@@ -438,11 +439,11 @@ class RokuSystem(System):
         if not self.ctl.connected:
             return [[Seg(self._status(), dim=True)]]
         _, media = self.ctl.snapshot()
-        label, color = badge(media.state)
+        label, dim = badge(media.state)
         detail = media.app or self.ctl.device.name or ""
-        # IDLE and PLAYING use the Roku accent (bold purple), mirroring
+        # Accent-colored badge (bright for PLAYING/IDLE, dim for PAUSED), mirroring
         # Router's "● ONLINE" / Lighting's "● CONNECTED".
-        return [[Seg(label, color or self.color, bold=True), Seg("    " + detail)]]
+        return [[Seg(label, self.color, bold=not dim, dim=dim), Seg("    " + detail)]]
 
     # -- expanded ----------------------------------------------------------
     def render_expanded(self, region: Region) -> None:
@@ -463,9 +464,9 @@ class RokuSystem(System):
 
     def _render_header(self, region: Region) -> None:
         dev, media = self.ctl.snapshot()
-        # Line 0: status badge (bold accent) + what's on, mirroring Router/Lighting.
-        label, color = badge(media.state)
-        region.text(0, 0, label, color or self.color, bold=True)
+        # Line 0: status badge (accent color) + what's on, mirroring Router/Lighting.
+        label, dim = badge(media.state)
+        region.text(0, 0, label, self.color, bold=not dim, dim=dim)
         line = media.app or "Home"
         if media.position and media.duration:
             line += f"   {media.position} / {media.duration}"
