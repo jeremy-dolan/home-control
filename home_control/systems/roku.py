@@ -306,13 +306,16 @@ class RokuController:
             self._post(f"launch/{app_id}")
 
     def search(self, keyword: str) -> None:
-        """Open Roku's global search pre-filled with `keyword` (ECP search/browse).
+        """Open Roku's global *content* search pre-filled with `keyword`.
 
-        Note: the Search *keypress* is dead — deprecated in Roku OS 12 (reserved
-        for voice remotes) — but this endpoint still works, verified live on OS
-        15.3.4."""
+        Modern Roku OS quirks (the Search *keypress* died in OS 12): the
+        documented ``search/browse?keyword=<term>`` now searches only the
+        channel/app store, while the undocumented ``search/browse?<term>=``
+        (term as the parameter name, value discarded) drives the global
+        What-to-Watch content search — the one the home-menu Search item
+        opens. Verified live on OS 15.3.4."""
         if not self.mock:
-            self._post(f"search/browse?keyword={urllib.parse.quote(keyword, safe='')}")
+            self._post(f"search/browse?{urllib.parse.quote(keyword, safe='')}=")
 
     def load_apps(self) -> None:
         if self.mock:

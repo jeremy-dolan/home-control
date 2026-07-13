@@ -192,7 +192,8 @@ def test_controller_search_url_encodes(monkeypatch):
     posts: list[str] = []
     monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
     ctl.search("purple pineapple & co")
-    assert posts == ["search/browse?keyword=purple%20pineapple%20%26%20co"]
+    # Keyword rides as the parameter *name* (content search); see ctl.search.
+    assert posts == ["search/browse?purple%20pineapple%20%26%20co="]
 
 
 def test_clamp_scroll_keeps_cursor_visible():
