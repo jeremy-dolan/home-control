@@ -88,6 +88,63 @@ def test_roku_badge():
     assert roku.badge("close") == ("■ IDLE", "")
 
 
+def _mock_roku(monkeypatch):
+    monkeypatch.setenv("HOME_CONTROL_MOCK", "1")
+    system = roku.RokuSystem()
+    system.poll(True)  # load fixture device/apps
+    return system
+
+
+def test_digit_apps_skip_lettered_shortcuts(monkeypatch):
+    rk = _mock_roku(monkeypatch)
+    digits = rk.digit_apps()
+    # Mock fixture order, minus the five lettered shortcut apps.
+    assert [(d, name) for d, _, name in digits] == [
+        ("1", "Hulu"), ("2", "Disney+"), ("3", "Spotify"),
+    ]
+
+
+def test_send_text_url_encodes_lit_keypress(monkeypatch):
+    ctl = roku.RokuController(ip="192.0.2.1")
+    ctl.mock = False
+    posts: list[str] = []
+    monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
+    ctl.send_text("a")
+    ctl.send_text(" ")
+    ctl.send_text("&")
+    assert posts == ["keypress/Lit_a", "keypress/Lit_%20", "keypress/Lit_%26"]
+
+
+def test_keyboard_mode_forwards_and_swallows_keys(monkeypatch):
+    import curses
+
+    rk = _mock_roku(monkeypatch)
+    sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "send_text", lambda ch: sent.append(ch))
+    monkeypatch.setattr(rk.ctl, "key", lambda name: sent.append(f"<{name}>"))
+
+    assert rk.handle_key(ord("\\")) and rk.mode == "keyboard"
+    for ch in "hi":
+        assert rk.handle_key(ord(ch))
+    assert rk.typed == "hi" and sent == ["h", "i"]
+    assert rk.handle_key(curses.KEY_BACKSPACE)
+    assert rk.typed == "h" and sent[-1] == "<Backspace>"
+    # 'q' must not fall through to shell globals (quit) — it's literal text now.
+    assert rk.handle_key(ord("q")) and sent[-1] == "q"
+    assert rk.handle_key(curses.KEY_UP) and sent[-1] == "<Up>"  # arrows still navigate
+    assert rk.handle_key(27) and rk.mode == "remote"            # ESC exits, sends nothing
+    assert sent[-1] == "<Up>"
+
+
+def test_search_shortcut_enters_keyboard_mode(monkeypatch):
+    rk = _mock_roku(monkeypatch)
+    sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "key", lambda name: sent.append(name))
+    rk.typed = "stale"
+    assert rk.handle_key(ord("/"))
+    assert rk.mode == "keyboard" and rk.typed == "" and sent == ["Search"]
+
+
 def test_clamp_scroll_keeps_cursor_visible():
     # cursor below window → scroll to show it at the bottom
     assert sonos._clamp_scroll(cursor=10, scroll=0, visible=5) == 6
