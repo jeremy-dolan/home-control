@@ -303,6 +303,15 @@ class RokuController:
         if not self.mock:
             self._post(f"launch/{app_id}")
 
+    def search(self, keyword: str) -> None:
+        """Open Roku's global search pre-filled with `keyword` (ECP search/browse).
+
+        Note: the Search *keypress* is dead — deprecated in Roku OS 12 (reserved
+        for voice remotes) — but this endpoint still works, verified live on OS
+        15.3.4."""
+        if not self.mock:
+            self._post(f"search/browse?keyword={urllib.parse.quote(keyword, safe='')}")
+
     def load_apps(self) -> None:
         if self.mock:
             return
@@ -397,10 +406,10 @@ class RokuSystem(System):
 
     def __init__(self):
         self.ctl = RokuController()
-        self.mode = "remote"  # remote | apps | keyboard
+        self.mode = "remote"  # remote | apps | keyboard | search
         self.app_cursor = 0
         self.app_scroll = 0
-        self.typed = ""       # local echo of keyboard-mode input (best-effort)
+        self.typed = ""       # keyboard mode: local echo; search mode: the query buffer
 
     def poll(self, focused: bool) -> None:
         self.ctl.poll(focused)
@@ -459,6 +468,8 @@ class RokuSystem(System):
         self._render_header(region)
         if self.mode == "keyboard":
             self._render_keyboard(region)
+        elif self.mode == "search":
+            self._render_search(region)
         else:
             self._render_remote(region)
 
@@ -529,10 +540,13 @@ class RokuSystem(System):
         region.text(row + 1, rgt + 1, "a", bold=True)
         region.text(row + 1, rgt + 4, "all apps…")
 
-    def _render_keyboard(self, region: Region) -> None:
-        region.text(_GRID_TOP, 2, "Keyboard", self.color, bold=True)
-        region.text(_GRID_TOP, 12, "— every keystroke is sent live to the Roku")
-        # Framed input echo with a block cursor; tail-truncated when long.
+    def _render_input_box(self, region: Region, title: str, caption: str,
+                          hints: str, note: str = "") -> None:
+        """Shared typing UI for the keyboard and search sub-modes: a titled,
+        framed input line showing `self.typed` with a block cursor (tail-
+        truncated when long), plus a hint line and an optional dim note."""
+        region.text(_GRID_TOP, 2, title, self.color, bold=True)
+        region.text(_GRID_TOP, 3 + len(title), caption)
         box_w = min(60, region.width - 8)
         inner = box_w - 2
         shown = "  " + self.typed
@@ -545,8 +559,23 @@ class RokuSystem(System):
         region.text(top + 1, 5 + len(shown), "▌", self.color)
         region.text(top + 1, 4 + box_w - 1, "│", self.color)
         region.text(top + 2, 4, "└" + "─" * inner + "┘", self.color)
-        region.text(top + 4, 4, "⌫ delete    ⏎ submit    ↕←→ still navigate    \\ or ESC exit")
-        region.text(top + 5, 4, "Echo is local — the Roku's on-screen field is the truth.", dim=True)
+        region.text(top + 4, 4, hints)
+        if note:
+            region.text(top + 5, 4, note, dim=True)
+
+    def _render_keyboard(self, region: Region) -> None:
+        self._render_input_box(
+            region, "Keyboard", "— every keystroke is sent live to the Roku",
+            "⌫ delete    ⏎ submit    ↕←→ still navigate    \\ or ESC exit",
+            "Echo is local — the Roku's on-screen field is the truth.",
+        )
+
+    def _render_search(self, region: Region) -> None:
+        self._render_input_box(
+            region, "Search", "— ⏎ sends the query to Roku's global search",
+            "⌫ delete    ⏎ search    \\ or ESC cancel",
+            "Nothing is sent while you type.",
+        )
 
     def _render_apps(self, region: Region) -> None:
         apps = self.ctl.apps
@@ -570,6 +599,8 @@ class RokuSystem(System):
             return "↕ nav   ENTER launch   ESC back"
         if self.mode == "keyboard":
             return "type to send   ⏎ submit   ⌫ delete   \\ or ESC exit"
+        if self.mode == "search":
+            return "type query   ⏎ search   ⌫ delete   \\ or ESC cancel"
         return "↕←→ navigate   ENTER ok   \\ keyboard   / search   ⌫ back"
 
     def toolbar_line(self) -> Line | None:
@@ -579,6 +610,9 @@ class RokuSystem(System):
         if self.mode == "keyboard":
             return hint_row(hint("type", "to send", self.color), hint("⏎", "submit", self.color),
                             hint("⌫", "delete", self.color), hint("\\ ESC", "exit", self.color))
+        if self.mode == "search":
+            return hint_row(hint("type", "query", self.color), hint("⏎", "search", self.color),
+                            hint("⌫", "delete", self.color), hint("\\ ESC", "cancel", self.color))
         return hint_row(
             hint("↕←→", "navigate", self.color), hint("ENTER", "ok", self.color),
             hint("\\", "keyboard", self.color), hint("/", "search", self.color),
@@ -591,7 +625,8 @@ class RokuSystem(System):
             "Multiple Rokus: connects to the first found (first of N discovered).",
             "Set [roku] ip in config to skip discovery and connect instantly.",
             "\\ enters keyboard mode: typed characters go to the Roku's on-screen",
-            "text field (search, logins). / opens Roku search and starts typing.",
+            "text field (logins, in-app search). / composes a query locally and",
+            "sends it to Roku's global search in one shot on ⏎.",
             "Digits 1-9 launch installed apps beyond the lettered shortcuts.",
         ]
 
@@ -601,6 +636,8 @@ class RokuSystem(System):
             return self._handle_apps_key(key)
         if self.mode == "keyboard":
             return self._handle_keyboard_key(key)
+        if self.mode == "search":
+            return self._handle_search_key(key)
         return self._handle_remote_key(key)
 
     def _handle_remote_key(self, key: int) -> bool:
@@ -644,10 +681,10 @@ class RokuSystem(System):
             self.typed = ""
             self.mode = "keyboard"
         elif key == ord("/"):
-            # Jump to Roku's global search and start typing immediately.
-            ctl.key("Search")
+            # Compose a query locally; ⏎ fires one search/browse call. (The
+            # Search keypress is a no-op on modern Roku OS — see ctl.search.)
             self.typed = ""
-            self.mode = "keyboard"
+            self.mode = "search"
         elif key == ord("a"):  # lowercase a = apps list (distinct from 'A' = Apple TV)
             ctl.load_apps()
             self.app_cursor = self.app_scroll = 0
@@ -692,6 +729,23 @@ class RokuSystem(System):
             ch = chr(key)
             ctl.send_text(ch)
             self.typed += ch
+        return True
+
+    def _handle_search_key(self, key: int) -> bool:
+        """Search mode: the query is buffered locally and sent as a single
+        search/browse call on ⏎. Same key-swallowing rules as keyboard mode."""
+        if key in (27, ord("\\")):
+            self.mode = "remote"
+        elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
+            term = self.typed.strip()
+            if term:
+                self.ctl.search(term)
+                self.set_status(f'Searching "{term}"')
+                self.mode = "remote"
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            self.typed = self.typed[:-1]
+        elif 32 <= key < 127:
+            self.typed += chr(key)
         return True
 
     # -- voice -------------------------------------------------------------

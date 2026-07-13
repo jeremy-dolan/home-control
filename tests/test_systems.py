@@ -136,13 +136,44 @@ def test_keyboard_mode_forwards_and_swallows_keys(monkeypatch):
     assert sent[-1] == "<Up>"
 
 
-def test_search_shortcut_enters_keyboard_mode(monkeypatch):
+def test_search_mode_buffers_locally_and_sends_once(monkeypatch):
+    import curses
+
     rk = _mock_roku(monkeypatch)
+    searches: list[str] = []
     sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "search", lambda kw: searches.append(kw))
     monkeypatch.setattr(rk.ctl, "key", lambda name: sent.append(name))
+    monkeypatch.setattr(rk.ctl, "send_text", lambda ch: sent.append(ch))
+
     rk.typed = "stale"
-    assert rk.handle_key(ord("/"))
-    assert rk.mode == "keyboard" and rk.typed == "" and sent == ["Search"]
+    assert rk.handle_key(ord("/")) and rk.mode == "search" and rk.typed == ""
+    for ch in "the matrix":
+        assert rk.handle_key(ord(ch))
+    assert rk.handle_key(curses.KEY_BACKSPACE) and rk.typed == "the matri"
+    assert sent == [] and searches == []      # nothing hits the device while typing
+    assert rk.handle_key(ord("\n"))           # ⏎ fires exactly one search/browse
+    assert searches == ["the matri"] and rk.mode == "remote"
+
+    # ESC cancels without sending anything.
+    rk.handle_key(ord("/"))
+    rk.handle_key(ord("x"))
+    assert rk.handle_key(27) and rk.mode == "remote" and searches == ["the matri"]
+
+    # ⏎ on an empty/whitespace buffer sends nothing and stays in search mode.
+    rk.handle_key(ord("/"))
+    rk.handle_key(ord(" "))
+    assert rk.handle_key(ord("\n"))
+    assert rk.mode == "search" and searches == ["the matri"]
+
+
+def test_controller_search_url_encodes(monkeypatch):
+    ctl = roku.RokuController(ip="192.0.2.1")
+    ctl.mock = False
+    posts: list[str] = []
+    monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
+    ctl.search("purple pineapple & co")
+    assert posts == ["search/browse?keyword=purple%20pineapple%20%26%20co"]
 
 
 def test_clamp_scroll_keeps_cursor_visible():
