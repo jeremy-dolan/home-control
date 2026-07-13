@@ -601,7 +601,7 @@ class RokuSystem(System):
             return "type to send   ⏎ submit   ⌫ delete   \\ or ESC exit"
         if self.mode == "search":
             return "type query   ⏎ search   ⌫ delete   \\ or ESC cancel"
-        return "↕←→ navigate   ENTER ok   \\ keyboard   / search   ⌫ back"
+        return "↕←→ navigate   ENTER ok   \\ keyboard   ⌫ back"
 
     def toolbar_line(self) -> Line | None:
         if self.mode == "apps":
@@ -615,8 +615,7 @@ class RokuSystem(System):
                             hint("⌫", "delete", self.color), hint("\\ ESC", "cancel", self.color))
         return hint_row(
             hint("↕←→", "navigate", self.color), hint("ENTER", "ok", self.color),
-            hint("\\", "keyboard", self.color), hint("/", "search", self.color),
-            hint("⌫", "back", self.color),
+            hint("\\", "keyboard", self.color), hint("⌫", "back", self.color),
         )
 
     def help_notes(self) -> list[str]:
@@ -631,6 +630,11 @@ class RokuSystem(System):
         ]
 
     # -- input -------------------------------------------------------------
+    def captures_text(self) -> bool:
+        # In the typing sub-modes the shell must let SPACE through as a literal
+        # space instead of triggering push-to-talk.
+        return self.mode in ("keyboard", "search")
+
     def handle_key(self, key: int) -> bool:
         if self.mode == "apps":
             return self._handle_apps_key(key)

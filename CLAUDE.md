@@ -39,7 +39,9 @@ only through these methods: layout (`layout.py`), box drawing and color
 `System` contract. TAB/Shift-TAB always changes focus at the shell level and
 is never delegated to a panel; a focused panel's `handle_key` gets first crack
 at other keys, and unconsumed keys fall through to shell globals (`?` help,
-`q`/ESC quit, SPACE for voice).
+`q`/ESC quit, SPACE for voice). Exception: while the focused panel reports
+`captures_text()` (a text-entry state, e.g. Roku's keyboard/search modes), the
+shell suspends the SPACE binding so it reaches the panel as a typed character.
 
 Voice control layers on top: each `System` exposes `voice_actions()` →
 `VoiceAction`s (name/description/handler/JSON-schema params), which

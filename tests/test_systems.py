@@ -167,6 +167,25 @@ def test_search_mode_buffers_locally_and_sends_once(monkeypatch):
     assert rk.mode == "search" and searches == ["the matri"]
 
 
+def test_captures_text_only_in_typing_modes(monkeypatch):
+    rk = _mock_roku(monkeypatch)
+    sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "send_text", lambda ch: sent.append(ch))
+    assert not rk.captures_text()          # remote mode: SPACE stays push-to-talk
+    rk.handle_key(ord("a"))
+    assert not rk.captures_text()          # apps mode too
+    rk.handle_key(27)
+    rk.handle_key(ord("\\"))
+    assert rk.captures_text()              # keyboard mode: SPACE is a character
+    rk.handle_key(ord(" "))
+    assert sent == [" "] and rk.typed == " "
+    rk.handle_key(27)
+    rk.handle_key(ord("/"))
+    assert rk.captures_text()              # search mode: SPACE is a character
+    rk.handle_key(ord(" "))
+    assert rk.typed == " " and sent == [" "]  # buffered locally, not sent
+
+
 def test_controller_search_url_encodes(monkeypatch):
     ctl = roku.RokuController(ip="192.0.2.1")
     ctl.mock = False
