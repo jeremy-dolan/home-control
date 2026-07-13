@@ -601,7 +601,7 @@ class RokuSystem(System):
             return "type to send   ⏎ submit   ⌫ delete   \\ or ESC exit"
         if self.mode == "search":
             return "type query   ⏎ search   ⌫ delete   \\ or ESC cancel"
-        return "↕←→ navigate   ENTER ok   \\ keyboard   ⌫ back"
+        return "↕←→ navigate   ENTER ok   \\ keyboard mode   ⌫ back"
 
     def toolbar_line(self) -> Line | None:
         if self.mode == "apps":
@@ -615,7 +615,7 @@ class RokuSystem(System):
                             hint("⌫", "delete", self.color), hint("\\ ESC", "cancel", self.color))
         return hint_row(
             hint("↕←→", "navigate", self.color), hint("ENTER", "ok", self.color),
-            hint("\\", "keyboard", self.color), hint("⌫", "back", self.color),
+            hint("\\", "keyboard mode", self.color), hint("⌫", "back", self.color),
         )
 
     def help_notes(self) -> list[str]:
