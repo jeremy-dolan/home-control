@@ -186,18 +186,22 @@ def test_captures_text_only_in_typing_modes(monkeypatch):
     assert rk.typed == " " and sent == [" "]  # buffered locally, not sent
 
 
-def test_controller_search_opens_then_types(monkeypatch):
+def test_controller_search_navigates_types_and_focuses_results(monkeypatch):
     ctl = roku.RokuController(ip="192.0.2.1")
     ctl.mock = False
     posts: list[str] = []
     monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
     monkeypatch.setattr(roku.time, "sleep", lambda s: None)
     ctl._search_sync("a &b")
-    # Open the content-search screen (keyword as the parameter *name*), then
-    # type the query into its focused field — see RokuController.search.
+    # Keypress-driven: home rail → Search → type → focus results.
+    # (ECP search/browse only reaches the app store on modern Roku OS.)
     assert posts == [
-        "search/browse?a%20%26b=",
+        "keypress/Home", "keypress/Left",
+        *["keypress/Up"] * roku.SEARCH_RAIL_UPS,
+        *["keypress/Down"] * roku.SEARCH_RAIL_DOWNS,
+        "keypress/Select",
         "keypress/Lit_a", "keypress/Lit_%20", "keypress/Lit_%26", "keypress/Lit_b",
+        *["keypress/Right"] * roku.SEARCH_RESULT_RIGHTS,
     ]
 
 

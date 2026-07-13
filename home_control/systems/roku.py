@@ -48,9 +48,16 @@ RECONNECT_GRACE = 3
 # Seconds a Roku may randomize its SSDP reply over (the MX header). Discovery
 # listens at least this long so a late responder isn't missed.
 SSDP_MX = 2
-# Pause between opening the global search screen and typing the query into it,
-# so the screen's text field has focus before the Lit_ keypresses arrive.
-SEARCH_FOCUS_DELAY = 1.5  # seconds
+# Global-search navigation (see RokuController.search): the home menu is driven
+# by keypresses, so these constants track the Roku home UI layout — verified
+# live on OS 15.3.4; adjust if a Roku update reorders the left rail.
+SEARCH_RAIL_UPS = 8       # clamp the rail cursor to the top item
+SEARCH_RAIL_DOWNS = 4     # Search's slot, counting down from the top
+SEARCH_RESULT_RIGHTS = 6  # from the on-screen keyboard grid to the result list
+SEARCH_KEY_GAP = 0.25     # pause between nav keypresses so the UI keeps up
+SEARCH_HOME_DELAY = 2.5   # wait for the home screen after keypress/Home
+SEARCH_FOCUS_DELAY = 1.5  # wait for Search's text field after Select
+SEARCH_RESULTS_DELAY = 1.5  # wait for results to populate after typing
 
 # App-launch shortcuts: key -> (app_id, name). IDs are Roku channel store ids.
 # Installed apps beyond these get digit keys (1-9) assigned in the Apps column.
@@ -309,28 +316,39 @@ class RokuController:
             self._post(f"launch/{app_id}")
 
     def search(self, keyword: str) -> None:
-        """Open Roku's global *content* search and type `keyword` into it.
+        """Open Roku's global *content* search, type `keyword`, focus results.
 
-        Modern Roku OS quirks (the Search *keypress* died in OS 12): the
-        documented ``search/browse?keyword=<term>`` opens the channel-store
-        search, and while the undocumented ``search/browse?<term>=`` form
-        opens the right screen (global What-to-Watch content search), the
-        term itself is discarded — the field shows only its placeholder. So
-        we open the screen, wait for its text field to take focus, and type
-        the query with Lit_ keypresses. Runs on a worker thread: the focus
-        delay must not stall the UI thread. Verified live on OS 15.3.4."""
+        There is no working API for this on modern Roku OS: the Search
+        keypress died in OS 12, and every form of ECP ``search/browse``
+        (``keyword=``, ``<term>=``, ``type=movie``) now searches only the
+        channel/app store — all verified live on OS 15.3.4. So we drive the
+        home menu exactly like a human with a remote: Home → into the left
+        rail → clamp to the top → down to the Search item → Select → type the
+        query → arrow Right across the keyboard grid onto the first result.
+        Runs on a worker thread — the whole dance takes ~10s and must not
+        stall the UI thread."""
         if self.mock:
             return
         threading.Thread(target=self._search_sync, args=(keyword,), daemon=True,
                          name="roku-search").start()
 
     def _search_sync(self, keyword: str) -> None:
-        # The term rides as the parameter name: today's OS ignores it (we type
-        # it below), but on older OS that honored it this opens pre-filled.
-        self._post(f"search/browse?{urllib.parse.quote(keyword, safe='')}=")
-        time.sleep(SEARCH_FOCUS_DELAY)
+        def press(name: str, delay: float = SEARCH_KEY_GAP) -> None:
+            self._post(f"keypress/{name}")
+            time.sleep(delay)
+
+        press("Home", SEARCH_HOME_DELAY)
+        press("Left")  # move focus from the home grid into the left rail
+        for _ in range(SEARCH_RAIL_UPS):
+            press("Up")
+        for _ in range(SEARCH_RAIL_DOWNS):
+            press("Down")
+        press("Select", SEARCH_FOCUS_DELAY)
         for ch in keyword:
             self._post(f"keypress/Lit_{urllib.parse.quote(ch, safe='')}")
+        time.sleep(SEARCH_RESULTS_DELAY)
+        for _ in range(SEARCH_RESULT_RIGHTS):
+            press("Right")
 
     def load_apps(self) -> None:
         if self.mock:
