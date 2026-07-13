@@ -318,13 +318,27 @@ class RokuController:
     def search(self, keyword: str) -> None:
         """Open Roku's global *content* search, type `keyword`, focus results.
 
-        There is no working API for this on modern Roku OS: the Search
-        keypress died in OS 12, and every form of ECP ``search/browse``
-        (``keyword=``, ``<term>=``, ``type=movie``) now searches only the
-        channel/app store — all verified live on OS 15.3.4. So we drive the
-        home menu exactly like a human with a remote: Home → into the left
-        rail → clamp to the top → down to the Search item → Select → type the
-        query → arrow Right across the keyboard grid onto the first result.
+        Why this is keypress automation instead of an API call: there is no
+        working API for content search on modern Roku OS. Every route was
+        tried live against a Roku Ultra on OS 15.3.4 (2026-07) and dead-ends
+        in the same place:
+
+        * ``keypress/Search`` — deprecated in Roku OS 12 (the key is reserved
+          for voice remotes); returns 200 and does nothing.
+        * ``search/browse?keyword=<term>`` — the *documented* form; opens the
+          channel/app-store search, not content search.
+        * ``search/browse?<term>=`` (term as the parameter name, trailing
+          ``=``) — a community workaround from the OS 12.5 era (Home Assistant
+          shipped it); on 15.3.4 it also lands in the app store.
+        * ``search/browse?keyword=<term>&type=movie`` — app store again.
+
+        So we drive the home menu exactly like a human with a remote: Home →
+        into the left rail → clamp to the top → down to the Search item →
+        Select → type the query via Lit_ → arrow Right across the on-screen
+        keyboard grid onto the first result. The step counts/delays are the
+        SEARCH_* module constants: they encode the OS 15.3.4 home-UI layout
+        and are the first thing to re-check when a Roku update breaks this.
+
         Runs on a worker thread — the whole dance takes ~10s and must not
         stall the UI thread."""
         if self.mock:
