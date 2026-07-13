@@ -823,8 +823,9 @@ class MideaSystem(System):
             "persistent background thread doing heartbeats and state "
             "refreshes, so the cards reflect live state with no polling lag. "
             "Units are auto-discovered by LAN broadcast.",
-            "Config [midea]: units pins units by IP (skipping broadcast "
-            "discovery) and can give each a friendly name that overrides the "
+            "Config [midea]: units pins units by IP, allowing us to skip the "
+            "broadcast-discovery scan and display the devices instantly. Also "
+            "allows assigning each a friendly name that overrides the "
             'unit\'s firmware name (e.g. "net_ac_16A4"). Newer "V3" units '
             "require a one-time cloud login to fetch a per-device token, "
             "cached locally afterward so the cloud is only touched once; set "
