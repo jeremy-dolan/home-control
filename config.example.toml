@@ -28,23 +28,23 @@ speaker_order = []
 # password = "admin-password"   # enables the authenticated device list (Verizon Fios)
 
 [midea]
-# Pin specific units by IP (skips LAN broadcast discovery for these). Each
-# entry's "name" overrides the unit's own reported firmware name (e.g.
-# "net_ac_16A4"). Leave unset to auto-discover all reachable units.
+# Pin specific units by IP: they show in the panel immediately and, once
+# paired, connect with no discovery round at all (broadcast discovery blocks
+# ~5s). Each entry's "name" overrides the unit's own reported firmware name
+# (e.g. "net_ac_16A4"). Leave unset to auto-discover all reachable units.
 # units = [
 #   { ip = "192.168.1.50", name = "Living Room" },
 # ]
 #
 # V3 units need a one-time cloud pairing to fetch a token/key (cached locally
-# afterward, see ~/.cache/home-control/midea_tokens.json). By default this
-# uses msmart-ng's shared demo NetHome Plus account, which can get rate-
-# limited if many users hit it at once. Set your own account to avoid that
-# (the units must already be added to it in whichever app you use):
+# afterward, see ~/.cache/home-control/midea_tokens.json). Set your Midea
+# account (the units must already be added to it in whichever app you use):
 # account = "you@example.com"
 # password = "your-account-password"
 #
 # Which app/cloud your account belongs to (they're separate backends even
 # though they control the same physical protocol):
 #   "nethome_plus" (default) — the "NetHome Plus" app
-#   "smarthome"              — the "SmartHome"/MSmartHome app
+#   "smarthome"              — the "SmartHome"/MSmartHome app (what Midea is
+#                              migrating users to)
 # cloud = "smarthome"
