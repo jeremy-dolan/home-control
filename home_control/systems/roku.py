@@ -59,8 +59,10 @@ APP_SHORTCUTS = {
     "A": ("551012", "Apple TV"),
 }
 
+# PLAYING deliberately has no semantic colour: "" falls back to the bold Roku
+# accent (bright purple) where the badge is drawn, same as IDLE.
 _BADGE = {
-    "play": ("▶ PLAYING", "green"),
+    "play": ("▶ PLAYING", ""),
     "pause": ("⏸ PAUSED", "yellow"),
 }
 
@@ -438,7 +440,7 @@ class RokuSystem(System):
         _, media = self.ctl.snapshot()
         label, color = badge(media.state)
         detail = media.app or self.ctl.device.name or ""
-        # IDLE has no semantic colour → use the Roku accent (bold purple), mirroring
+        # IDLE and PLAYING use the Roku accent (bold purple), mirroring
         # Router's "● ONLINE" / Lighting's "● CONNECTED".
         return [[Seg(label, color or self.color, bold=True), Seg("    " + detail)]]
 
