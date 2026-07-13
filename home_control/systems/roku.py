@@ -54,8 +54,10 @@ SSDP_MX = 2
 APP_SHORTCUTS = {
     "Y": ("837", "YouTube"),
     "N": ("12", "Netflix"),
-    "Z": ("13", "Prime Video"),
-    "H": ("61322", "HBO Max"),
+    "V": ("13", "Prime Video"),
+    "H": ("2285", "Hulu"),
+    "C": ("593099", "Peacock"),
+    "D": ("291097", "Disney+"),
     "A": ("551012", "Apple TV"),
 }
 
@@ -339,7 +341,7 @@ class RokuController:
             self.apps = [
                 ("837", "YouTube"), ("12", "Netflix"), ("13", "Prime Video"),
                 ("551012", "Apple TV"), ("61322", "HBO Max"), ("2285", "Hulu"),
-                ("291097", "Disney+"), ("143", "Spotify"),
+                ("593099", "Peacock TV"), ("291097", "Disney+"), ("143", "Spotify"),
             ]
 
 

@@ -98,9 +98,9 @@ def _mock_roku(monkeypatch):
 def test_digit_apps_skip_lettered_shortcuts(monkeypatch):
     rk = _mock_roku(monkeypatch)
     digits = rk.digit_apps()
-    # Mock fixture order, minus the five lettered shortcut apps.
+    # Mock fixture order, minus the lettered shortcut apps.
     assert [(d, name) for d, _, name in digits] == [
-        ("1", "Hulu"), ("2", "Disney+"), ("3", "Spotify"),
+        ("1", "HBO Max"), ("2", "Spotify"),
     ]
 
 
