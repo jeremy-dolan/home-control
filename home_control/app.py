@@ -141,21 +141,20 @@ class Shell:
             pass
 
     def _render_help(self, stdscr: curses.window, h: int, w: int, focused_slot: layout.Slot) -> None:
-        # Per-system help only: the global keys are already on the bottom bar.
-        # Fixed width (clamped for narrow terminals) so every system's help
-        # reads the same; notes are paragraphs, word-wrapped here.
+        # Per-system explanatory notes only: the panel's own key hints live on
+        # its toolbar and the global keys on the bottom bar, so neither is
+        # repeated here. Fixed width (clamped for narrow terminals) so every
+        # system's help reads the same; notes are paragraphs, word-wrapped.
         system = self.systems[self.focused]
         bw = min(HELP_WIDTH, w - 10)
         inner = bw - 4
-        rows: list[tuple[str, bool]] = [  # (text, is_key_line)
-            (line, True) for line in textwrap.wrap(system.toolbar(), inner)
-        ]
+        rows: list[str] = []
         for note in system.help_notes():
             if rows:
-                rows.append(("", False))
-            rows.extend((line, False) for line in textwrap.wrap(note, inner))
+                rows.append("")
+            rows.extend(textwrap.wrap(note, inner))
         if not rows:
-            rows = [("This panel has no controls of its own.", False)]
+            rows = ["This panel has no controls of its own."]
         footer = "press any key to close"
         bh = len(rows) + 4  # borders + blank separator + footer
         # Center on the focused panel's box, not the whole screen, but clamp
@@ -165,8 +164,8 @@ class Shell:
         left = max(0, (w - bw) // 2)
         region = draw_box(stdscr, top, left, bh, bw, f"{system.name} help",
                           system.color, focused=True)
-        for i, (text, is_keys) in enumerate(rows):
-            region.text(i, 0, text, system.color if is_keys else "")
+        for i, text in enumerate(rows):
+            region.text(i, 0, text)
         region.text(len(rows) + 1, max(0, (inner - len(footer)) // 2), footer, dim=True)
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
