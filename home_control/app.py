@@ -153,6 +153,7 @@ class Shell:
             rows.extend(textwrap.wrap(note, inner))
         if not rows:
             rows = ["This panel has no controls of its own."]
+        rows.insert(0, "")  # blank line buffer below the title border
         footer = "press any key to close"
         bh = len(rows) + 4  # borders + blank separator + footer
         # Center on the focused panel's box, not the whole screen, but clamp
