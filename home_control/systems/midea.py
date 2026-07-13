@@ -539,7 +539,9 @@ class MideaSystem(System):
     target temperature, and each hotkey's letter is always the field
     label's first letter, colored as a standing mnemonic. Offline units
     still render their full (last-known or default) card, entirely dimmed —
-    just not selectable, since there's nothing live to command."""
+    just not selectable, since there's nothing live to command. Powered-off
+    units dim the same way but stay selectable (only the selection cursor
+    keeps its accent), so ENTER can wake them."""
 
     name = "Midea AC"
     color_key = "midea"
@@ -636,8 +638,13 @@ class MideaSystem(System):
         header = self._header_row(u, is_selected, width)
         row_a = self._row_a(u, width)
         row_b = self._row_b(u, width)
-        if not u.online:
-            return [self._dim(header), self._dim(row_a), self._dim(row_b)]
+        if not u.online or not u.power:
+            rows = [self._dim(header), self._dim(row_a), self._dim(row_b)]
+            if u.online and is_selected:
+                # An off unit is still selectable (to power it back on), so
+                # the accent cursor must survive the dimming.
+                rows[0][0] = header[0]
+            return rows
         return [header, row_a, row_b]
 
     @staticmethod
@@ -733,6 +740,8 @@ class MideaSystem(System):
             "Hotkeys act on the selected unit; each field's colored letter is",
             "its key: p power, m mode, f fan, s swing, e eco, t turbo, d display.",
             "Auto-discovers via LAN broadcast; pin IPs in [midea] units to skip it.",
+            'A pinned entry\'s name = "..." sets a friendly display name, replacing',
+            'the unit\'s firmware name (e.g. "net_ac_16A4"). See config.toml.',
             "V3 units need a one-time cloud pairing; the token is cached afterward.",
         ]
 

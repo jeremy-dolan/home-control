@@ -105,6 +105,29 @@ def test_system_collapsed_lines_one_row_per_unit(mock_env):
     assert len(lines) == 3
 
 
+def test_card_rows_powered_off_unit_fully_dimmed():
+    s = midea.MideaSystem()
+    rows = s._card_rows(_unit(power=False), is_selected=False, width=80)
+    assert len(rows) == 3
+    assert all(seg.dim for row in rows for seg in row)
+
+
+def test_card_rows_powered_off_selected_keeps_cursor_accent():
+    s = midea.MideaSystem()
+    rows = s._card_rows(_unit(power=False), is_selected=True, width=80)
+    cursor = rows[0][0]
+    assert cursor.text == "▶ "
+    assert cursor.color == s.color and cursor.bold and not cursor.dim
+    assert all(seg.dim for seg in rows[0][1:])
+    assert all(seg.dim for row in rows[1:] for seg in row)
+
+
+def test_card_rows_powered_on_unit_not_dimmed():
+    s = midea.MideaSystem()
+    rows = s._card_rows(_unit(power=True, mode="COOL"), is_selected=False, width=80)
+    assert any(not seg.dim for seg in rows[0])
+
+
 def test_system_collapsed_lines_before_discovery():
     # No mock env: no units yet, single "Discovering..." line, not a crash.
     s = midea.MideaSystem()
