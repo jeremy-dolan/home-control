@@ -186,14 +186,19 @@ def test_captures_text_only_in_typing_modes(monkeypatch):
     assert rk.typed == " " and sent == [" "]  # buffered locally, not sent
 
 
-def test_controller_search_url_encodes(monkeypatch):
+def test_controller_search_opens_then_types(monkeypatch):
     ctl = roku.RokuController(ip="192.0.2.1")
     ctl.mock = False
     posts: list[str] = []
     monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
-    ctl.search("purple pineapple & co")
-    # Keyword rides as the parameter *name* (content search); see ctl.search.
-    assert posts == ["search/browse?purple%20pineapple%20%26%20co="]
+    monkeypatch.setattr(roku.time, "sleep", lambda s: None)
+    ctl._search_sync("a &b")
+    # Open the content-search screen (keyword as the parameter *name*), then
+    # type the query into its focused field — see RokuController.search.
+    assert posts == [
+        "search/browse?a%20%26b=",
+        "keypress/Lit_a", "keypress/Lit_%20", "keypress/Lit_%26", "keypress/Lit_b",
+    ]
 
 
 def test_clamp_scroll_keeps_cursor_visible():

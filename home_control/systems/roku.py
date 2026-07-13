@@ -48,6 +48,9 @@ RECONNECT_GRACE = 3
 # Seconds a Roku may randomize its SSDP reply over (the MX header). Discovery
 # listens at least this long so a late responder isn't missed.
 SSDP_MX = 2
+# Pause between opening the global search screen and typing the query into it,
+# so the screen's text field has focus before the Lit_ keypresses arrive.
+SEARCH_FOCUS_DELAY = 1.5  # seconds
 
 # App-launch shortcuts: key -> (app_id, name). IDs are Roku channel store ids.
 # Installed apps beyond these get digit keys (1-9) assigned in the Apps column.
@@ -306,16 +309,28 @@ class RokuController:
             self._post(f"launch/{app_id}")
 
     def search(self, keyword: str) -> None:
-        """Open Roku's global *content* search pre-filled with `keyword`.
+        """Open Roku's global *content* search and type `keyword` into it.
 
         Modern Roku OS quirks (the Search *keypress* died in OS 12): the
-        documented ``search/browse?keyword=<term>`` now searches only the
-        channel/app store, while the undocumented ``search/browse?<term>=``
-        (term as the parameter name, value discarded) drives the global
-        What-to-Watch content search — the one the home-menu Search item
-        opens. Verified live on OS 15.3.4."""
-        if not self.mock:
-            self._post(f"search/browse?{urllib.parse.quote(keyword, safe='')}=")
+        documented ``search/browse?keyword=<term>`` opens the channel-store
+        search, and while the undocumented ``search/browse?<term>=`` form
+        opens the right screen (global What-to-Watch content search), the
+        term itself is discarded — the field shows only its placeholder. So
+        we open the screen, wait for its text field to take focus, and type
+        the query with Lit_ keypresses. Runs on a worker thread: the focus
+        delay must not stall the UI thread. Verified live on OS 15.3.4."""
+        if self.mock:
+            return
+        threading.Thread(target=self._search_sync, args=(keyword,), daemon=True,
+                         name="roku-search").start()
+
+    def _search_sync(self, keyword: str) -> None:
+        # The term rides as the parameter name: today's OS ignores it (we type
+        # it below), but on older OS that honored it this opens pre-filled.
+        self._post(f"search/browse?{urllib.parse.quote(keyword, safe='')}=")
+        time.sleep(SEARCH_FOCUS_DELAY)
+        for ch in keyword:
+            self._post(f"keypress/Lit_{urllib.parse.quote(ch, safe='')}")
 
     def load_apps(self) -> None:
         if self.mock:
