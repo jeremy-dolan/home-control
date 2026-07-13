@@ -961,6 +961,19 @@ class SonosSystem(System):
         return ("↕ speaker  ←→ vol  ENTER play/pause  [] skip  m mute  "
                 "u queue  f fav  g group  d device")
 
+    def help_notes(self) -> list[str]:
+        # Keep in sync with the Sonos entry in README.md "Device support".
+        return [
+            "Controls Sonos speakers through the community-supported SoCo "
+            "library: play/pause and transport, volume, grouping, the queue, "
+            "and your Sonos Favorites. Speakers are discovered automatically "
+            "on the LAN. (Local library serving, streaming service "
+            "integration, and EQ editing aren't ported yet.)",
+            "Config: [sonos] speaker_order sets the top-to-bottom display "
+            "order using exact Sonos room names; leave it empty to sort "
+            "alphabetically.",
+        ]
+
     # -- input -------------------------------------------------------------
     def handle_key(self, key: int) -> bool:
         if self.mode == "queue":

@@ -1249,7 +1249,18 @@ class HueSystem(System):
         return self._list_toolbar_hints()
 
     def help_notes(self) -> list[str]:
-        return ["PgUp/PgDn jump 5 rows at a time."]
+        # Keep in sync with the Lighting entry in README.md "Device support".
+        return [
+            "Controls a Philips Hue bridge via the phue2 library for on/off, "
+            "brightness, colour, scenes, and per-room or per-light control, "
+            "plus direct HTTPS calls to Hue's CLIP v2 API for the dynamic "
+            "effects (candle, fire, prism; plain colorloop is the older v1 "
+            "API).",
+            "Config: [hue] bridge_ip points at the bridge. The first "
+            "connection has to be authorized by pressing the physical link "
+            "button on the bridge — the panel will prompt you — after which "
+            "the credential is cached and reconnects are automatic.",
+        ]
 
     # -- input -------------------------------------------------------------
     def handle_key(self, key: int) -> bool:
