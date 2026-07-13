@@ -83,9 +83,126 @@ def test_fmt_ms():
 
 
 def test_roku_badge():
-    assert roku.badge("play")[0].startswith("▶")
-    assert roku.badge("pause")[0].startswith("⏸")
-    assert roku.badge("close") == ("■ IDLE", "")
+    assert roku.badge("play") == ("▶ PLAYING", False)   # bright accent
+    assert roku.badge("pause") == ("⏸ PAUSED", True)    # dimmed accent
+    assert roku.badge("close") == ("■ IDLE", False)
+
+
+def _mock_roku(monkeypatch):
+    monkeypatch.setenv("HOME_CONTROL_MOCK", "1")
+    system = roku.RokuSystem()
+    system.poll(True)  # load fixture device/apps
+    return system
+
+
+def test_digit_apps_skip_lettered_shortcuts(monkeypatch):
+    rk = _mock_roku(monkeypatch)
+    digits = rk.digit_apps()
+    # Mock fixture order, minus the lettered shortcut apps.
+    assert [(d, name) for d, _, name in digits] == [
+        ("1", "HBO Max"), ("2", "Spotify"),
+    ]
+
+
+def test_send_text_url_encodes_lit_keypress(monkeypatch):
+    ctl = roku.RokuController(ip="192.0.2.1")
+    ctl.mock = False
+    posts: list[str] = []
+    monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
+    ctl.send_text("a")
+    ctl.send_text(" ")
+    ctl.send_text("&")
+    assert posts == ["keypress/Lit_a", "keypress/Lit_%20", "keypress/Lit_%26"]
+
+
+def test_keyboard_mode_forwards_and_swallows_keys(monkeypatch):
+    import curses
+
+    rk = _mock_roku(monkeypatch)
+    sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "send_text", lambda ch: sent.append(ch))
+    monkeypatch.setattr(rk.ctl, "key", lambda name: sent.append(f"<{name}>"))
+
+    assert rk.handle_key(ord("\\")) and rk.mode == "keyboard"
+    for ch in "hi":
+        assert rk.handle_key(ord(ch))
+    assert rk.typed == "hi" and sent == ["h", "i"]
+    assert rk.handle_key(curses.KEY_BACKSPACE)
+    assert rk.typed == "h" and sent[-1] == "<Backspace>"
+    # 'q' must not fall through to shell globals (quit) — it's literal text now.
+    assert rk.handle_key(ord("q")) and sent[-1] == "q"
+    assert rk.handle_key(curses.KEY_UP) and sent[-1] == "<Up>"  # arrows still navigate
+    assert rk.handle_key(27) and rk.mode == "remote"            # ESC exits, sends nothing
+    assert sent[-1] == "<Up>"
+
+
+def test_search_mode_buffers_locally_and_sends_once(monkeypatch):
+    import curses
+
+    rk = _mock_roku(monkeypatch)
+    searches: list[str] = []
+    sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "search", lambda kw: searches.append(kw))
+    monkeypatch.setattr(rk.ctl, "key", lambda name: sent.append(name))
+    monkeypatch.setattr(rk.ctl, "send_text", lambda ch: sent.append(ch))
+
+    rk.typed = "stale"
+    assert rk.handle_key(ord("/")) and rk.mode == "search" and rk.typed == ""
+    for ch in "the matrix":
+        assert rk.handle_key(ord(ch))
+    assert rk.handle_key(curses.KEY_BACKSPACE) and rk.typed == "the matri"
+    assert sent == [] and searches == []      # nothing hits the device while typing
+    assert rk.handle_key(ord("\n"))           # ⏎ fires exactly one search/browse
+    assert searches == ["the matri"] and rk.mode == "remote"
+
+    # ESC cancels without sending anything.
+    rk.handle_key(ord("/"))
+    rk.handle_key(ord("x"))
+    assert rk.handle_key(27) and rk.mode == "remote" and searches == ["the matri"]
+
+    # ⏎ on an empty/whitespace buffer sends nothing and stays in search mode.
+    rk.handle_key(ord("/"))
+    rk.handle_key(ord(" "))
+    assert rk.handle_key(ord("\n"))
+    assert rk.mode == "search" and searches == ["the matri"]
+
+
+def test_captures_text_only_in_typing_modes(monkeypatch):
+    rk = _mock_roku(monkeypatch)
+    sent: list[str] = []
+    monkeypatch.setattr(rk.ctl, "send_text", lambda ch: sent.append(ch))
+    assert not rk.captures_text()          # remote mode: SPACE stays push-to-talk
+    rk.handle_key(ord("a"))
+    assert not rk.captures_text()          # apps mode too
+    rk.handle_key(27)
+    rk.handle_key(ord("\\"))
+    assert rk.captures_text()              # keyboard mode: SPACE is a character
+    rk.handle_key(ord(" "))
+    assert sent == [" "] and rk.typed == " "
+    rk.handle_key(27)
+    rk.handle_key(ord("/"))
+    assert rk.captures_text()              # search mode: SPACE is a character
+    rk.handle_key(ord(" "))
+    assert rk.typed == " " and sent == [" "]  # buffered locally, not sent
+
+
+def test_controller_search_navigates_types_and_focuses_results(monkeypatch):
+    ctl = roku.RokuController(ip="192.0.2.1")
+    ctl.mock = False
+    posts: list[str] = []
+    monkeypatch.setattr(ctl, "_post", lambda path: (posts.append(path), True)[1])
+    monkeypatch.setattr(roku.time, "sleep", lambda s: None)
+    ctl._search_sync("a &b")
+    # Keypress-driven: home rail → Search → type → focus results.
+    # (ECP search/browse only reaches the app store on modern Roku OS.)
+    assert posts == [
+        "keypress/Home", "keypress/Left",
+        *["keypress/Up"] * roku.SEARCH_RAIL_UPS,
+        *["keypress/Down"] * roku.SEARCH_RAIL_DOWNS,
+        "keypress/Select",
+        "keypress/Lit_a", "keypress/Lit_%20", "keypress/Lit_%26", "keypress/Lit_b",
+        *["keypress/Right"] * roku.SEARCH_RESULT_RIGHTS,
+    ]
 
 
 def test_clamp_scroll_keeps_cursor_visible():

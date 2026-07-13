@@ -18,8 +18,9 @@ from .voice import VoiceController
 # Cap drawn width so boxes don't sprawl on very wide terminals.
 MAX_WIDTH = 100
 
-# Push-to-talk key: spacebar, handled globally before any panel. Panels use
-# ENTER for their main action instead, so nothing competes for space.
+# Push-to-talk key: spacebar, handled globally ahead of panel hotkeys — except
+# while the focused panel reports captures_text() (text-entry state), when
+# SPACE falls through to it as a typed character.
 VOICE_KEY = ord(" ")
 
 # Fixed geometry for the Voice box: sized to fit the input-mode prompt, then
@@ -230,7 +231,9 @@ class Shell:
             self.show_help = False
             return False
 
-        if key == VOICE_KEY:  # push-to-talk
+        # Push-to-talk — unless the focused panel is taking text input (e.g. the
+        # Roku keyboard/search modes), where SPACE must type a literal space.
+        if key == VOICE_KEY and not self.systems[self.focused].captures_text():
             self.voice.begin()
             return False
         if key == 9:  # TAB — always shell focus, never delegated

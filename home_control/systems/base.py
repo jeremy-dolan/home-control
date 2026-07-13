@@ -116,6 +116,12 @@ class System(ABC):
         """Handle a key while focused. Return True if consumed (else shell globals)."""
         return False
 
+    def captures_text(self) -> bool:
+        """True while the focused panel is in a text-entry state. The shell then
+        suspends global bindings on printable keys (SPACE push-to-talk) so they
+        reach handle_key as characters instead. TAB stays shell-owned."""
+        return False
+
     # Voice control (NLU via Claude tool-calling) --------------------------
     def voice_actions(self) -> list[VoiceAction]:
         """Voice-callable actions this system exposes. Default: none."""
