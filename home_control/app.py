@@ -141,10 +141,8 @@ class Shell:
             pass
 
     def _render_help(self, stdscr: curses.window, h: int, w: int, focused_slot: layout.Slot) -> None:
-        # Per-system explanatory notes only: the panel's own key hints live on
-        # its toolbar and the global keys on the bottom bar, so neither is
-        # repeated here. Fixed width (clamped for narrow terminals) so every
-        # system's help reads the same; notes are paragraphs, word-wrapped.
+        # Fixed width (clamped for narrow terminals) so every system's help
+        # reads the same; notes are paragraphs, word-wrapped here.
         system = self.systems[self.focused]
         bw = min(HELP_WIDTH, w - 10)
         inner = bw - 4

@@ -108,7 +108,7 @@ class System(ABC):
         return None
 
     def help_notes(self) -> list[str]:
-        """Optional prose shown under the key line in the help popup.
+        """Optional prose shown in the panel's help popup.
 
         Each entry is one paragraph; the shell word-wraps it to the popup's
         fixed width and blank-line-separates paragraphs, so don't pre-wrap.
