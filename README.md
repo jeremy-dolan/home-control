@@ -36,9 +36,9 @@ Some places Claude fell short:
 
 ## Device support
 
-If you want to use this, the thing to do is just have Claude wire in whatever
-home devices you have---the shell should extend quite easily. Out of the box,
-home-control supports the following:
+If you want to use this, you can probably ask Claude to wire in whatever
+devices you have. The code is semi-modular—and what is a module anyway?
+Out of the box, home-control supports:
 
 ### Router: Verizon Fios CR1000A
 
