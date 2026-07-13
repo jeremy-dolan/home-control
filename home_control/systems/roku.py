@@ -671,14 +671,21 @@ class RokuSystem(System):
         )
 
     def help_notes(self) -> list[str]:
+        # Keep in sync with the Roku entry in README.md "Device support".
         return [
-            "Auto-discovers via SSDP (~3s); shows Discovering... while searching.",
-            "Multiple Rokus: connects to the first found (first of N discovered).",
-            "Set [roku] ip in config to skip discovery and connect instantly.",
-            "\\ enters keyboard mode: typed characters go to the Roku's on-screen",
-            "text field (logins, in-app search). / composes a query locally and",
-            "sends it to Roku's global search in one shot on ⏎.",
-            "Digits 1-9 launch installed apps beyond the lettered shortcuts.",
+            "Controls Roku players over ECP (External Control Protocol — "
+            "HTTP on port 8060): navigation, playback, app launch, and "
+            "typing into on-screen text fields. The player is auto-discovered "
+            "via SSDP at startup (~3s); if several respond, the first is "
+            "used. ECP reports the foreground app and playback state but not "
+            "the media title (Roku doesn't expose it), so the status line "
+            "names the app, not the particular content being played.",
+            "Keyboard mode forwards each character straight to whatever field "
+            "the Roku is currently showing (logins, in-app search). Search "
+            "mode composes a query locally and fires it at Roku's global "
+            "search in one shot.",
+            "Config: [roku] ip pins the device and skips the SSDP sweep for "
+            "a quicker initialization.",
         ]
 
     # -- input -------------------------------------------------------------

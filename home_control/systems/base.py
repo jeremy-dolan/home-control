@@ -108,7 +108,11 @@ class System(ABC):
         return None
 
     def help_notes(self) -> list[str]:
-        """Optional free-text lines shown under the toolbar in the help overlay."""
+        """Optional prose shown in the panel's help popup.
+
+        Each entry is one paragraph; the shell word-wraps it to the popup's
+        fixed width and blank-line-separates paragraphs, so don't pre-wrap.
+        """
         return []
 
     # Input (main thread, focused only) ------------------------------------
