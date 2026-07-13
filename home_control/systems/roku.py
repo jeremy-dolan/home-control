@@ -544,7 +544,7 @@ class RokuSystem(System):
         region.text(top + 1, 5 + len(shown), "▌", self.color)
         region.text(top + 1, 4 + box_w - 1, "│", self.color)
         region.text(top + 2, 4, "└" + "─" * inner + "┘", self.color)
-        region.text(top + 4, 4, "⌫ delete    ⏎ submit    ↑↓←→ still navigate    \\ or ESC exit")
+        region.text(top + 4, 4, "⌫ delete    ⏎ submit    ↕←→ still navigate    \\ or ESC exit")
         region.text(top + 5, 4, "Echo is local — the Roku's on-screen field is the truth.", dim=True)
 
     def _render_apps(self, region: Region) -> None:
