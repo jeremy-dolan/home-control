@@ -3,6 +3,9 @@
 A unified interface to control *every* device in your home. *ALL* smart devices
 are supported! Whatever hardware you've got, just ask Claude to wire it up :)
 
+Each module talks to its devices directly; no Internet or cloud are required
+(except a one-time token retrieval for Midea AC units, noted below).
+
 <p align="center">
   <img src="assets/demo.gif" width="746" />
 </p>
@@ -11,7 +14,7 @@ are supported! Whatever hardware you've got, just ask Claude to wire it up :)
 lights off. -->
 
 To get a feel for the current state of agentic engineering, I built this with
-Claude (Opus 4.8 and Sonnet 5) and a self-imposed rule to never look at the
+Claude (mostly Opus 4.8) and a self-imposed rule to never look at the
 actual code. Claude (`--dangerously-skip-permissions`) had free rein on a
 sandbox, with some impressive results:
 - Opus one-shot the voice-command mode even without access to an API key for
@@ -33,15 +36,11 @@ Some places Claude fell short:
 
 ## Device support
 
-<!-- DEV NOTE: keep this section in sync with each system's help_notes() (the
-     in-app `?` help). Same wording lives in home_control/systems/*.py; if you
-     edit one, edit the other. See the "Docs sync" note in CLAUDE.md. -->
+If you want to use this, the thing to do is just have Claude wire in whatever
+home devices you have---the shell should extend quite easily. Out of the box,
+home-control supports the following:
 
-Each panel talks to its devices directly over the local network — no cloud
-account or hub required (except a one-time cloud pairing for some Midea units,
-noted below).
-
-### Router
+### Router: Verizon Fios CR1000A
 
 Shows WAN health that the router publishes over UPnP (IGD, discovered via
 SSDP), no login required: connection status, uptime, public IP, link rates,
@@ -60,7 +59,7 @@ Config: `[router]` password unlocks the authoritative device list (Fios only);
 known descriptor URL; `probe_host` sets the latency/loss target (default
 1.1.1.1).
 
-### Roku
+### Media player: Roku
 
 Controls Roku players over ECP (External Control Protocol — HTTP on port 8060):
 navigation, playback, app launch, and typing into on-screen text fields. The
@@ -76,7 +75,7 @@ and fires it at Roku's global search in one shot.
 Config: `[roku] ip` pins the device and skips the SSDP sweep for a quicker
 initialization.
 
-### Sonos
+### Sound system: Sonos
 
 Controls Sonos speakers through the community-supported SoCo library: play/pause
 and transport, volume, grouping, the queue, and your Sonos Favorites. Speakers
