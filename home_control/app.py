@@ -38,6 +38,10 @@ VOICE_EXAMPLES = [
 ]
 GLOBAL_TOOLBAR = "TAB change system    SPACE voice command    ? help    q quit"
 
+# Help popup: one fixed width for every system (clamped to leave 5 columns of
+# margin each side on narrow terminals) so the boxes read consistently.
+HELP_WIDTH = 70
+
 LOG_PATH = Path(
     os.environ.get("HOME_CONTROL_LOG", Path.home() / ".cache" / "home-control" / "tui.log")
 )
@@ -134,30 +138,30 @@ class Shell:
             pass
 
     def _render_help(self, stdscr: curses.window, h: int, w: int) -> None:
+        # Per-system help only: the global keys are already on the bottom bar.
+        # Fixed width (clamped for narrow terminals) so every system's help
+        # reads the same; notes are paragraphs, word-wrapped here.
         system = self.systems[self.focused]
-        lines = [
-            ("TAB / Shift-TAB", "switch system"),
-            ("SPACE", "voice command"),
-            ("?", "toggle this help"),
-            ("q / ESC", "quit"),
-            ("", ""),
-            (f"— {system.name} —", ""),
-            (system.toolbar(), ""),
-            *[(note, "") for note in system.help_notes()],
+        bw = min(HELP_WIDTH, w - 10)
+        inner = bw - 4
+        rows: list[tuple[str, bool]] = [  # (text, is_key_line)
+            (line, True) for line in textwrap.wrap(system.toolbar(), inner)
         ]
-        bw = min(max(len(GLOBAL_TOOLBAR) + 4, *(len(a) + len(b) + 6 for a, b in lines)), w - 4)
-        bh = len(lines) + 4
+        for note in system.help_notes():
+            if rows:
+                rows.append(("", False))
+            rows.extend((line, False) for line in textwrap.wrap(note, inner))
+        if not rows:
+            rows = [("This panel has no controls of its own.", False)]
+        footer = "press any key to close"
+        bh = len(rows) + 4  # borders + blank separator + footer
         top = max(0, (h - bh) // 2)
         left = max(0, (w - bw) // 2)
-        region = draw_box(stdscr, top, left, bh, bw, "Help", "white", focused=True)
-        for i, (a, b) in enumerate(lines):
-            if not a and not b:
-                continue
-            if b:
-                region.text(i, 0, f"{a:<16}", "white", bold=True)
-                region.text(i, 17, b)
-            else:
-                region.text(i, 0, a, system.color if a.startswith("—") else "")
+        region = draw_box(stdscr, top, left, bh, bw, f"{system.name} help",
+                          system.color, focused=True)
+        for i, (text, is_keys) in enumerate(rows):
+            region.text(i, 0, text, system.color if is_keys else "")
+        region.text(len(rows) + 1, max(0, (inner - len(footer)) // 2), footer, dim=True)
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
         mode, buffer, message, _is_error = self.voice.snapshot()

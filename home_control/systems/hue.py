@@ -1249,7 +1249,7 @@ class HueSystem(System):
         return self._list_toolbar_hints()
 
     def help_notes(self) -> list[str]:
-        return ["PgUp/PgDn  jump 5 rows"]
+        return ["PgUp/PgDn jump 5 rows at a time."]
 
     # -- input -------------------------------------------------------------
     def handle_key(self, key: int) -> bool:

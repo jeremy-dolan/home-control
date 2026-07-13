@@ -1355,8 +1355,9 @@ class RouterSystem(System):
 
     def help_notes(self) -> list[str]:
         return [
-            "Devices come from the router's own list (needs [router] password).",
-            "Without it, falls back to this host's ARP cache (fewer details).",
+            "The device list comes from the router itself when a [router] "
+            "password is configured; without one it falls back to this "
+            "host's ARP cache, which sees fewer devices and fewer details.",
         ]
 
     # -- input -------------------------------------------------------------

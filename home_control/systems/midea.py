@@ -737,12 +737,15 @@ class MideaSystem(System):
 
     def help_notes(self) -> list[str]:
         return [
-            "Hotkeys act on the selected unit; each field's colored letter is",
-            "its key: p power, m mode, f fan, s swing, e eco, t turbo, d display.",
-            "Auto-discovers via LAN broadcast; pin IPs in [midea] units to skip it.",
-            'A pinned entry\'s name = "..." sets a friendly display name, replacing',
-            'the unit\'s firmware name (e.g. "net_ac_16A4"). See config.toml.',
-            "V3 units need a one-time cloud pairing; the token is cached afterward.",
+            "Hotkeys act on the selected unit; each field's colored letter "
+            "is its key: p power, m mode, f fan, s swing, e eco, t turbo, "
+            "d display.",
+            "Units are auto-discovered via LAN broadcast; pin IPs in "
+            '[midea] units to skip it. A pinned entry\'s name = "..." sets '
+            "a friendly display name, replacing the unit's firmware name "
+            '(e.g. "net_ac_16A4") — see config.toml.',
+            "V3 units need a one-time cloud pairing; the token is cached "
+            "afterward.",
         ]
 
     # -- input -----------------------------------------------------------

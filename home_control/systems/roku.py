@@ -672,13 +672,14 @@ class RokuSystem(System):
 
     def help_notes(self) -> list[str]:
         return [
-            "Auto-discovers via SSDP (~3s); shows Discovering... while searching.",
-            "Multiple Rokus: connects to the first found (first of N discovered).",
-            "Set [roku] ip in config to skip discovery and connect instantly.",
-            "\\ enters keyboard mode: typed characters go to the Roku's on-screen",
-            "text field (logins, in-app search). / composes a query locally and",
-            "sends it to Roku's global search in one shot on ⏎.",
+            "\\ enters keyboard mode: typed characters go straight to the "
+            "Roku's on-screen text field (logins, in-app search). "
+            "/ composes a query locally and sends it to Roku's global search "
+            "in one shot on ⏎.",
             "Digits 1-9 launch installed apps beyond the lettered shortcuts.",
+            "The Roku is auto-discovered via SSDP at startup (~3s); if "
+            "several respond, the first found is used. Set [roku] ip in "
+            "config to skip discovery and connect instantly.",
         ]
 
     # -- input -------------------------------------------------------------
