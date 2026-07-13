@@ -28,9 +28,10 @@ speaker_order = []
 # password = "admin-password"   # enables the authenticated device list (Verizon Fios)
 
 [midea]
-# Pin specific units by IP (skips LAN broadcast discovery for these). Each
-# entry's "name" overrides the unit's own reported firmware name (e.g.
-# "net_ac_16A4"). Leave unset to auto-discover all reachable units.
+# Pin specific units by IP: they show in the panel immediately and, once
+# paired, connect with no discovery round at all (broadcast discovery blocks
+# ~5s). Each entry's "name" overrides the unit's own reported firmware name
+# (e.g. "net_ac_16A4"). Leave unset to auto-discover all reachable units.
 # units = [
 #   { ip = "192.168.1.50", name = "Living Room" },
 # ]

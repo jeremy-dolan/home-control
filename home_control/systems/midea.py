@@ -2,9 +2,8 @@
 midea_ac_lan integration).
 
 Split into:
-  * MideaController — thin sync wrapper. Unlike every other backend this app
-    used to bridge to (msmart-ng was fully asyncio), midea-local's device
-    objects are plain ``threading.Thread`` subclasses: each connected unit
+  * MideaController — thin sync wrapper. midea-local's device objects are
+    plain ``threading.Thread`` subclasses: each connected unit
     runs its own persistent background thread doing heartbeats/refreshes and
     parsing pushed state updates, and ``dev.attributes`` is a live-updated
     dict you can read with zero network I/O. Only the one-time cloud login
@@ -22,10 +21,9 @@ V3 devices need a per-device token+key, fetched from Midea's cloud on first
 pairing (then cached locally, see TOKEN_CACHE_PATH, so the cloud is only
 touched once per device). Midea's app ecosystem has several incompatible
 cloud backends behind the same physical protocol — "NetHome Plus" (the
-default; msmart-ng's old built-in shared demo account lived here) and
-"SmartHome"/MSmartHome (what Midea is migrating users to) are the two
-relevant ones; set ``[midea] cloud = "smarthome"`` in config to use the
-latter. This library's SmartHomeCloud implementation is the reason for the
+default) and "SmartHome"/MSmartHome (what Midea is migrating users to) are
+the two relevant ones; set ``[midea] cloud = "smarthome"`` in config to use
+the latter. This library's SmartHomeCloud implementation is the reason for the
 switch away from msmart-ng: msmart-ng's SmartHome ``get_token`` call has been
 broken since early 2025 (upstream issue #201, never fixed) because it omits
 an ``applianceCodes`` field the SmartHome endpoint silently requires;
@@ -105,6 +103,12 @@ class MideaUnit:
     ip: str
     name: str
     online: bool
+    # True once we've actually read this unit's state at least once. A pinned
+    # unit we've never reached (placeholder/failed pairing) leaves this False,
+    # so the panel can show a bare "connecting…" card instead of fabricated
+    # default field values. Once contacted it stays True even if the unit
+    # later goes offline — then its dimmed card is genuine last-known state.
+    contacted: bool = False
     power: bool = False
     mode: str = "COOL"            # AUTO | COOL | DRY | FAN_ONLY (no HEAT on this model)
     fan_speed: str = "AUTO"       # SILENT | LOW | MEDIUM | HIGH | AUTO | MAX
@@ -115,7 +119,10 @@ class MideaUnit:
     fahrenheit: bool = True       # this unit's own display-unit preference
     eco: bool = False
     turbo: bool = False
-    display_on: bool = True
+    # Defaults to False like every other toggle: an offline/placeholder unit
+    # whose real state we haven't read yet must not render a phantom "on"
+    # chip (real units always get the true value from _unit_from_device).
+    display_on: bool = False
     filter_alert: bool = False
     error_code: int = 0
     min_temp_c: float = 16.0
@@ -144,14 +151,18 @@ def unit_badge(u: MideaUnit) -> tuple[str, str]:
     when actively conditioning, grey "FAN" for fan-only, grey "OFF" for
     powered off, "????" for unreachable. Deliberately not Router's
     red-for-offline convention — off/unreachable read as calm grey here,
-    not alarming."""
+    not alarming. The label is padded to 4 chars (the widest: "????",
+    "COOL", "AUTO") so shorter ones ("OFF"/"FAN"/"DRY") don't shift the
+    name column that follows the badge."""
     if not u.online:
-        return "● ????", "light_grey"
-    if not u.power:
-        return "● OFF", "light_grey"
-    if u.mode == "FAN_ONLY":
-        return "● FAN", "light_grey"
-    return f"● {_MODE_LABEL.get(u.mode, u.mode)}", "midea_teal"
+        label, color = "????", "light_grey"
+    elif not u.power:
+        label, color = "OFF", "light_grey"
+    elif u.mode == "FAN_ONLY":
+        label, color = "FAN", "light_grey"
+    else:
+        label, color = _MODE_LABEL.get(u.mode, u.mode), "midea_teal"
+    return f"● {label:<4}", color
 
 
 def _c_to_f(c: float) -> float:
@@ -170,17 +181,23 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
 
 # ---------------------------------------------------------------------------
 # Token/key cache — best-effort, never fatal (a cache miss just re-pairs).
+# Entries also carry the device's discovery metadata (ip/port/protocol/type/
+# model) plus its learned unsupported-query list once it has connected
+# successfully, so pinned units skip both the UDP discovery round (discover()
+# always blocks its full 5s socket timeout, even for a single IP that answers
+# instantly) and connect()'s 2s-per-ignored-query protocol probing on later
+# runs.
 # ---------------------------------------------------------------------------
 
 
-def _load_token_cache(path: Path = TOKEN_CACHE_PATH) -> dict[str, dict[str, str]]:
+def _load_token_cache(path: Path = TOKEN_CACHE_PATH) -> dict[str, dict[str, Any]]:
     try:
         return json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
 
 
-def _save_token_cache(cache: dict[str, dict[str, str]], path: Path = TOKEN_CACHE_PATH) -> None:
+def _save_token_cache(cache: dict[str, dict[str, Any]], path: Path = TOKEN_CACHE_PATH) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(cache))
@@ -225,7 +242,7 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
     return MideaUnit(
         id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
-        online=dev.available,
+        online=dev.available, contacted=True,
         power=bool(a.get("power")),
         mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
         fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
@@ -268,6 +285,13 @@ class MideaController:
         self._last_attempt_t = 0.0
         self._last_seen_count = 0         # raw devices seen in the last pass
         self._last_connect_error = ""     # most recent per-device connect/auth failure
+        if not self.mock:
+            # Pinned units render immediately as (offline) placeholder cards
+            # rather than a bare "Discovering..." while the first connect
+            # pass runs; same synthetic-id scheme as _discover_all's loop.
+            for i, p in enumerate(self._pinned):
+                pid = -(1000 + i)
+                self._units[pid] = MideaUnit(id=pid, ip=p["ip"], name=p.get("name") or p["ip"], online=False)
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -292,10 +316,28 @@ class MideaController:
             return {did: await cloud.get_cloud_keys(did) for did in device_ids}
 
     # -- discovery/connect (blocking; runs on the Poller's own thread) ----
+    def _cached_raw(self, ip: str, name: str) -> dict[str, Any] | None:
+        """Rebuild a discovery-response dict for a pinned IP from cached
+        metadata (written on every successful connect), so an already-paired
+        unit connects with no UDP discovery round at all."""
+        for did_s, entry in self._token_cache.items():
+            if entry.get("ip") == ip and "port" in entry:
+                return {
+                    "device_id": int(did_s), "type": entry["type"], "ip_address": ip,
+                    "port": entry["port"], "protocol": entry["protocol"],
+                    "model": entry.get("model", ""), "_name": name, "_cached": True,
+                    "_unsupported": entry.get("unsupported") or [],
+                }
+        return None
+
     def _discover_raw(self) -> dict[int, dict[str, Any]]:
         if self._pinned:
             found: dict[int, dict[str, Any]] = {}
             for p in self._pinned:
+                cached = self._cached_raw(p["ip"], p.get("name") or "")
+                if cached is not None:
+                    found[cached["device_id"]] = cached
+                    continue
                 try:
                     # discover()'s type hint says list[...] | None, but a bare
                     # IP string is the documented/working usage (verified live) —
@@ -323,6 +365,14 @@ class MideaController:
         )
         if dev is None:
             return None
+        # connect(check_protocol=True) probes every query type the protocol
+        # defines and eats a 2s timeout per query this unit ignores (~6s
+        # total observed) — and midealocal re-learns that list per instance.
+        # Pre-seed it from the cache so a known unit reconnects in <1s. If
+        # the lib ever renames the attr this just sets a dead one: connects
+        # still work, only slower.
+        if raw.get("_unsupported"):
+            dev._unsupported_protocol = list(raw["_unsupported"])
         if dev.connect(check_protocol=True):
             return dev
         return None
@@ -373,16 +423,24 @@ class MideaController:
                             self._token_cache[str(did)] = method_keys
                             _save_token_cache(self._token_cache)
                             break
+            # Either branch below keys this IP by its real device_id, so any
+            # synthetic placeholder for it (seeded in __init__ or by the
+            # pinned loop below) is now stale.
+            for stale_id in [uid for uid, u in self._units.items() if uid < 0 and u.ip == d["ip_address"]]:
+                del self._units[stale_id]
             if dev is not None:
                 dev.daemon = True
                 dev.open()
                 self._devices[did] = dev
                 self._ips[did] = d["ip_address"]
                 connected_any = True
-                # Drop any stale synthetic placeholder this IP had before we
-                # ever got a real device_id for it (see the pinned loop below).
-                for stale_id in [uid for uid, u in self._units.items() if uid < 0 and u.ip == d["ip_address"]]:
-                    del self._units[stale_id]
+                meta = {"ip": d["ip_address"], "port": d["port"], "type": d["type"],
+                        "protocol": d["protocol"], "model": d.get("model", ""),
+                        "unsupported": sorted(getattr(dev, "_unsupported_protocol", []))}
+                entry = self._token_cache.setdefault(str(did), {})
+                if any(entry.get(k) != v for k, v in meta.items()):
+                    entry.update(meta)
+                    _save_token_cache(self._token_cache)
             else:
                 # Responded to the UDP broadcast (so we have a real device_id)
                 # but pairing failed — still show a dimmed placeholder card
@@ -390,6 +448,17 @@ class MideaController:
                 self._units[did] = MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or "", online=False)
                 if not self._last_connect_error:
                     self._last_connect_error = f"{d['ip_address']} did not respond to pairing"
+                if d.get("_cached"):
+                    # Cache-built params failed to connect: the metadata may
+                    # be stale (unit replaced, port/protocol changed), and
+                    # nothing would ever correct it — drop it so the next
+                    # pass falls back to a real discovery probe. A merely
+                    # unplugged unit re-pairs and re-caches when it returns.
+                    entry = self._token_cache.get(str(did))
+                    if entry:
+                        for k in ("ip", "port", "type", "protocol", "model", "unsupported"):
+                            entry.pop(k, None)
+                        _save_token_cache(self._token_cache)
 
         # Pinned entries that gave no UDP reply at all this pass — no real
         # device_id to key off, so use a stable synthetic one (position in
@@ -502,18 +571,19 @@ class MideaController:
             self._units = {
                 151732604866906: MideaUnit(
                     id=151732604866906, ip="192.168.1.50", name="Living Room", online=True,
-                    power=True, mode="COOL", fan_speed="MEDIUM", swing_mode="OFF",
+                    contacted=True, power=True, mode="COOL", fan_speed="MEDIUM", swing_mode="OFF",
                     target_temp_c=24.0, indoor_temp_c=24.0, outdoor_temp_c=23.5, fahrenheit=True,
+                    display_on=True,  # keep one demo unit with its display on
                 ),
                 151732604866907: MideaUnit(
                     id=151732604866907, ip="192.168.1.51", name="Bedroom", online=True,
-                    power=True, mode="FAN_ONLY", fan_speed="LOW", swing_mode="VERTICAL",
+                    contacted=True, power=True, mode="FAN_ONLY", fan_speed="LOW", swing_mode="VERTICAL",
                     target_temp_c=22.0, indoor_temp_c=26.0, outdoor_temp_c=23.5, fahrenheit=True,
                     eco=True, display_on=False, filter_alert=True,
                 ),
                 151732604866908: MideaUnit(
                     id=151732604866908, ip="192.168.1.52", name="Office", online=False,
-                    power=False, fahrenheit=True,
+                    contacted=True, power=False, fahrenheit=True,  # offline, showing last-known
                 ),
             }
 
@@ -636,6 +706,11 @@ class MideaSystem(System):
 
     def _card_rows(self, u: MideaUnit, is_selected: bool, width: int) -> list[Line]:
         header = self._header_row(u, is_selected, width)
+        if not u.contacted:
+            # Never reached this unit — we have no real field values, so show
+            # a single dimmed "connecting…" line rather than a card full of
+            # fabricated defaults.
+            return [self._dim(header)]
         row_a = self._row_a(u, width)
         row_b = self._row_b(u, width)
         if not u.online or not u.power:
@@ -655,7 +730,11 @@ class MideaSystem(System):
         label, color = unit_badge(u)
         cursor = Seg("▶ ", self.color, bold=True) if is_selected else Seg("  ")
         if not u.online:
-            return [cursor, Seg(label, color), Seg(f"  {u.name} (unreachable)")]
+            # "connecting…" while we've never reached it; "unreachable" only
+            # once we had it and lost contact (so the card's dimmed values are
+            # real last-known state, not defaults).
+            status = "unreachable" if u.contacted else "connecting…"
+            return [cursor, Seg(label, color), Seg(f"  {u.name} ({status})")]
         left: Line = [cursor, Seg(label, color, bold=(color == "midea_teal")), Seg(f"  {u.name}")]
         right: Line = []
         if u.filter_alert:
@@ -744,8 +823,9 @@ class MideaSystem(System):
             "persistent background thread doing heartbeats and state "
             "refreshes, so the cards reflect live state with no polling lag. "
             "Units are auto-discovered by LAN broadcast.",
-            "Config [midea]: units pins units by IP (skipping broadcast "
-            "discovery) and can give each a friendly name that overrides the "
+            "Config [midea]: units pins units by IP, allowing us to skip the "
+            "broadcast-discovery scan and display the devices instantly. Also "
+            "allows assigning each a friendly name that overrides the "
             'unit\'s firmware name (e.g. "net_ac_16A4"). Newer "V3" units '
             "require a one-time cloud login to fetch a per-device token, "
             "cached locally afterward so the cloud is only touched once; set "
