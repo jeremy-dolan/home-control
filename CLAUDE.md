@@ -77,6 +77,11 @@ first run. **Gotcha**: that template is a Python string literal
 byte-identical to `config.example.toml` in the repo — nothing currently tests
 this, so if you edit one, edit the other.
 
+**Docs sync**: the per-device implementation/config blurbs live in two places
+— the `## Device support` section of `README.md` and each system's
+`help_notes()` (the in-app `?` help). Keep them in sync: if you change how a
+device is discovered/configured, update both. Nothing tests this either.
+
 ## Testing
 
 - `pytest` (testpaths = `tests/` per `pyproject.toml`). No network calls in

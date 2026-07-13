@@ -815,14 +815,21 @@ class MideaSystem(System):
         )
 
     def help_notes(self) -> list[str]:
+        # Keep in sync with the Midea AC entry in README.md "Device support".
         return [
-            "Hotkeys act on the selected unit; each field's colored letter is",
-            "its key: p power, m mode, f fan, s swing, e eco, t turbo, d display.",
-            "Auto-discovers via LAN broadcast (~5s). Pinned [midea] units render",
-            "instantly and skip discovery entirely once their pairing is cached.",
-            'A pinned entry\'s name = "..." sets a friendly display name, replacing',
-            'the unit\'s firmware name (e.g. "net_ac_16A4"). See config.toml.',
-            "V3 units need a one-time cloud pairing; the token is cached afterward.",
+            "Controls Midea air conditioners over their local-LAN protocol "
+            "via midea-local (the extracted core of Home Assistant's "
+            "midea_ac_lan integration). Each connected unit runs its own "
+            "persistent background thread doing heartbeats and state "
+            "refreshes, so the cards reflect live state with no polling lag. "
+            "Units are auto-discovered by LAN broadcast.",
+            "Config [midea]: units pins units by IP (skipping broadcast "
+            "discovery) and can give each a friendly name that overrides the "
+            'unit\'s firmware name (e.g. "net_ac_16A4"). Newer "V3" units '
+            "require a one-time cloud login to fetch a per-device token, "
+            "cached locally afterward so the cloud is only touched once; set "
+            "account and password to your Midea app login, and cloud to "
+            'match which app it belongs to ("nethome_plus" or "smarthome").',
         ]
 
     # -- input -----------------------------------------------------------

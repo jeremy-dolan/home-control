@@ -1354,9 +1354,24 @@ class RouterSystem(System):
         return self._toolbar_hints()
 
     def help_notes(self) -> list[str]:
+        # Keep in sync with the Router entry in README.md "Device support".
         return [
-            "Devices come from the router's own list (needs [router] password).",
-            "Without it, falls back to this host's ARP cache (fewer details).",
+            "Shows WAN health that the router publishes over UPnP (IGD, "
+            "discovered via SSDP), no login required: connection status, "
+            "uptime, public IP, link rates, and live throughput (sampled "
+            "from the router's running byte counters). A separate TCP probe "
+            "to a public host each poll gives latency and rolling packet-loss.",
+            "The device list has two sources. With a [router] password set, "
+            "it logs into the router's web interface (custom built for the "
+            "Verizon Fios CR1000A, SHA-512 challenge auth) and reads the "
+            "router's device database — friendly names, device class, and "
+            "Wi-Fi/Ethernet per device. Without a password it falls back to "
+            "an ARP sweep of the local subnet, which sees fewer devices and "
+            "fewer details.",
+            "Config: [router] password unlocks the authoritative device list "
+            "(Fios only); router_ip restricts discovery to one gateway; "
+            "igd_url skips SSDP using a known descriptor URL; probe_host sets "
+            "the latency/loss target (default 1.1.1.1).",
         ]
 
     # -- input -------------------------------------------------------------
