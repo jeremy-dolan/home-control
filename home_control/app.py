@@ -106,10 +106,13 @@ class Shell:
         collapsed_heights = [s.collapsed_height for s in self.systems]
         slots = layout.compute_layout(collapsed_heights, self.focused, h)
 
+        focused_slot = slots[0]
         for slot in slots:
             system = self.systems[slot.index]
             region = draw_box(stdscr, slot.top, 0, slot.height, width,
                               system.name, system.color, focused=slot.focused)
+            if slot.focused:
+                focused_slot = slot
             if region.height <= 0:
                 continue
             if slot.focused:
@@ -121,7 +124,7 @@ class Shell:
         self._render_status_line(stdscr, h, w)
         self._render_global_toolbar(stdscr, h, w)
         if self.show_help:
-            self._render_help(stdscr, h, w)
+            self._render_help(stdscr, h, w, focused_slot)
         if self.voice.active():
             self._render_voice(stdscr, h, w)
         stdscr.refresh()
@@ -137,7 +140,7 @@ class Shell:
         except curses.error:
             pass
 
-    def _render_help(self, stdscr: curses.window, h: int, w: int) -> None:
+    def _render_help(self, stdscr: curses.window, h: int, w: int, focused_slot: layout.Slot) -> None:
         # Per-system help only: the global keys are already on the bottom bar.
         # Fixed width (clamped for narrow terminals) so every system's help
         # reads the same; notes are paragraphs, word-wrapped here.
@@ -155,7 +158,10 @@ class Shell:
             rows = [("This panel has no controls of its own.", False)]
         footer = "press any key to close"
         bh = len(rows) + 4  # borders + blank separator + footer
-        top = max(0, (h - bh) // 2)
+        # Center on the focused panel's box, not the whole screen, but clamp
+        # so a tall help box never runs off-screen for a short focused panel.
+        panel_mid = focused_slot.top + focused_slot.height // 2
+        top = max(0, min(h - bh, panel_mid - bh // 2))
         left = max(0, (w - bw) // 2)
         region = draw_box(stdscr, top, left, bh, bw, f"{system.name} help",
                           system.color, focused=True)
