@@ -58,8 +58,8 @@ def test_int_slider_has_dot_and_centre_tick():
 
 
 def test_sonos_badge():
-    assert sonos.badge("PLAYING") == ("▶ PLAYING", "green")
-    assert sonos.badge("PAUSED_PLAYBACK")[0].startswith("⏸")
+    assert sonos.badge("PLAYING") == ("▶ PLAYING", "yellow")
+    assert sonos.badge("PAUSED_PLAYBACK") == ("⏸ PAUSED", "grey")
     assert sonos.badge("STOPPED") == ("■ STOPPED", "grey")
 
 

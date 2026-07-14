@@ -105,8 +105,8 @@ class DeviceField:
 # ---------------------------------------------------------------------------
 
 _BADGES = {
-    "PLAYING": ("▶ PLAYING", "green"),
-    "PAUSED_PLAYBACK": ("⏸ PAUSED", "yellow"),
+    "PLAYING": ("▶ PLAYING", "yellow"),
+    "PAUSED_PLAYBACK": ("⏸ PAUSED", "grey"),
     "TRANSITIONING": ("⟳ LOADING", "yellow"),
     "STOPPED": ("■ STOPPED", "grey"),
 }
@@ -1021,10 +1021,12 @@ class SonosSystem(System):
         mute = "M" if zone.muted else " "
         group = "+" if zone.grouped else " "
         cursor = Seg("▶ ", self.color, bold=True) if active else Seg("  ")
-        # Selected rows brighten the filled bar via a lighter accent (bold alone
-        # can't brighten a custom 256-colour accent); the badge label is left
-        # un-bolded here so the row-wide bolding below makes it react to selection.
-        bar_color = lighten(self.color) if active else self.color
+        # Filled bar: base yellow, brightened to a lighter yellow when selected.
+        # lighten() allocates a real lighter colour pair, so the highlight doesn't
+        # depend on the terminal rendering bold as a bright colour (heavy bar
+        # glyphs barely show bold weight anyway). Same mechanism as Hue's
+        # brightness bar, just yellow instead of the blue accent.
+        bar_color = lighten("yellow") if active else "yellow"
         segs: Line = [
             cursor,
             Seg(f"{zone.name:<16}  "),

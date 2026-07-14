@@ -2,6 +2,11 @@
 
 Known follow-up work, roughly in priority order.
 
+## redo hotkeys for Sonos panel
+
+Stop isn't currently available and the status bar is a mess
+
+
 ## Keep grouped speakers' status in sync on the expanded panel
 
 **Priority:** medium · **Scope:** `home_control/systems/sonos.py`
