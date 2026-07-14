@@ -2,6 +2,34 @@
 
 Known follow-up work, roughly in priority order.
 
+## Keep grouped speakers' status in sync on the expanded panel
+
+**Priority:** medium · **Scope:** `home_control/systems/sonos.py`
+(`SonosController` polling)
+
+### Problem
+
+When speakers are grouped, the expanded panel's per-speaker status rows drift out
+of sync after a transport action. Example: speakers grouped and paused. Hit ENTER
+on Living Room — it goes LOADING for ~1s then PLAYING, but Kitchen keeps showing
+PAUSED for ~3 more seconds until the next full poll catches up:
+
+```
+▶ Living Room   ▶ PLAYING    +  ━━━━●───────  40%  Calabria 2008  —  ...
+  Kitchen       ⏸ PAUSED     +  ━━━●────────  35%  Calabria 2008  —  ...
+```
+
+Physically they're one group and change transport together, so the stale row is
+purely a display lag: `_poll_active_fast` only refreshes the active zone, and
+grouped members share the coordinator's transport state.
+
+### Proposed direction
+
+When the active zone is grouped, fan the fast-refresh's transport/track state out
+to every zone in the same group (they share the coordinator), instead of updating
+only `active_idx`. Alternatively, after a transport command on a grouped
+coordinator, mark all group members dirty so the next frame reflects the change.
+
 ## Make Sonos command handlers non-blocking (main-thread network)
 
 **Priority:** high · **Scope:** `home_control/systems/sonos.py` (Sonos first;

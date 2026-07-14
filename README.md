@@ -82,8 +82,13 @@ and transport, volume, grouping, the queue, and your Sonos Favorites. Speakers
 are discovered automatically on the LAN. (Local library serving, streaming
 service integration, and EQ editing aren't ported yet.)
 
-Config: `[sonos] speaker_order` sets the top-to-bottom display order using exact
-Sonos room names; leave it empty to sort alphabetically.
+Config: `[sonos] speakers` pins speakers by IP — each entry is
+`{ ip = "...", name = "..." }` — to skip the ~2s SSDP discovery and connect
+instantly. The list order is the display order, top to bottom, and the optional
+`name` overrides the speaker's own room name. If some speakers are pinned and
+more are found on the network, a popup lists the unpinned ones. With nothing
+pinned, `speaker_order` sets the order by exact Sonos room name (empty sorts
+alphabetically).
 
 ### Lighting (Hue)
 

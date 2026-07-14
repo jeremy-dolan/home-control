@@ -37,9 +37,19 @@ bridge_ip = "192.168.1.99"
 # ip = "192.168.1.80"
 
 [sonos]
-# Speaker display order (top to bottom). Use exact Sonos room names.
-# Leave empty to sort alphabetically. Example:
-#   speaker_order = ["Living Room", "Kitchen"]
+# Pin speakers by IP to skip SSDP discovery and connect instantly (discovery
+# otherwise adds a ~2s sweep at startup). The list order is the display order,
+# top to bottom. An optional "name" overrides the speaker's own Sonos room
+# name. If any speakers are pinned and more are found on the network, a popup
+# lists the unpinned ones so you can add them. Leave unset to auto-discover
+# every speaker on the LAN.
+# speakers = [
+#   { ip = "192.168.1.60" },
+#   { ip = "192.168.1.61", name = "Kitchen" },
+# ]
+#
+# Fallback ordering when nothing is pinned: exact Sonos room names, top to
+# bottom. Leave empty to sort alphabetically.
 speaker_order = []
 
 [router]
