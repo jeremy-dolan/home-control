@@ -20,15 +20,11 @@ bridge_ip = "192.168.1.99"
 # top to bottom. An optional "name" overrides the speaker's own Sonos room
 # name. If any speakers are pinned and more are found on the network, a popup
 # lists the unpinned ones so you can add them. Leave unset to auto-discover
-# every speaker on the LAN.
+# every speaker on the LAN (listed alphabetically).
 # speakers = [
 #   { ip = "192.168.1.60" },
 #   { ip = "192.168.1.61", name = "Kitchen" },
 # ]
-#
-# Fallback ordering when nothing is pinned: exact Sonos room names, top to
-# bottom. Leave empty to sort alphabetically.
-speaker_order = []
 
 [router]
 # Router status via UPnP IGD (auto-discovered over SSDP) — all optional.

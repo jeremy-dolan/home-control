@@ -210,7 +210,6 @@ class SonosController:
         self.queue_items: list[QueueItem] = []
         self.favorites: list[FavoriteItem] = []
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
-        self._order: list[str] = config.get("sonos", "speaker_order", []) or []
         # Pinned speakers (ip, name_override) skip SSDP; empty → auto-discover.
         self._pinned = _parse_speakers(config.get("sonos", "speakers", []))
         self._name_overrides = {ip: name for ip, name in self._pinned if name}
@@ -331,14 +330,9 @@ class SonosController:
             self._new_devices = []
 
     def _apply_order(self, devices: list) -> list:
-        """Order devices by the configured speaker_order; unknowns appended A→Z."""
-        if not self._order:
-            return sorted(devices, key=lambda d: d.player_name)
-        by_name = {d.player_name: d for d in devices}
-        ordered = [by_name[n] for n in self._order if n in by_name]
-        rest = sorted((d for d in devices if d.player_name not in self._order),
-                      key=lambda d: d.player_name)
-        return ordered + rest
+        """Sort auto-discovered devices alphabetically by room name (pin speakers
+        in [sonos] speakers to control the order instead)."""
+        return sorted(devices, key=lambda d: d.player_name)
 
     def _coordinator(self, device):
         try:
@@ -1135,10 +1129,11 @@ class SonosSystem(System):
             "Config: [sonos] speakers pins speakers by IP — each entry is "
             "{ ip = \"...\", name = \"...\" } — to skip the ~2s SSDP discovery "
             "and connect instantly; the list order is the display order and the "
-            "optional name overrides the speaker's own room name. If some are "
-            "pinned and more turn up on the network, a popup lists the unpinned "
-            "ones. With nothing pinned, speaker_order sets the order by exact "
-            "room name (empty = alphabetical).",
+            "optional name overrides the speaker's own room name. If additional "
+            "speakers are broadcast within the same system as the pinned "
+            "speakers, a popup will alert the user about additional devices "
+            "being available. If nothing is pinned in the config, speakers are "
+            "auto-discovered and listed alphabetically.",
         ]
 
     # -- modal alerts ------------------------------------------------------

@@ -82,6 +82,7 @@ def test_discover_resolves_order_without_holding_lock(monkeypatch):
 
     ctl = sonos.SonosController()
     ctl.mock = False
+    ctl._pinned = []  # force the discovery path regardless of the ambient config
     monkeypatch.setattr(soco, "discover", lambda timeout=2: ["devA", "devB"])
     monkeypatch.setattr(ctl, "_poll_all", lambda: None)
 
@@ -137,6 +138,7 @@ def test_fully_grouped():
 
 def test_collapsed_height_dynamic():
     s = sonos.SonosSystem()
+    s.ctl._pinned = []  # ignore any ambient config so the no-pins case is deterministic
     # No state yet: 1 row while discovering, one row per pinned speaker otherwise.
     assert s.collapsed_height == 1
     s.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}, {"ip": "1.1.1.2"}])
