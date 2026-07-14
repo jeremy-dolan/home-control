@@ -28,8 +28,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
-from ..ui import Line, Region, Seg, lighten, pad_between, select_row
-from .base import System
+from ..ui import Line, Region, Seg, justify, lighten, pad_between, select_row
+from .base import Popup, System
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
 # milliseconds, but when a speaker responds to SSDP discovery yet its control
@@ -105,8 +105,8 @@ class DeviceField:
 # ---------------------------------------------------------------------------
 
 _BADGES = {
-    "PLAYING": ("▶ PLAYING", "green"),
-    "PAUSED_PLAYBACK": ("⏸ PAUSED", "yellow"),
+    "PLAYING": ("▶ PLAYING", "yellow"),
+    "PAUSED_PLAYBACK": ("⏸ PAUSED", "grey"),
     "TRANSITIONING": ("⟳ LOADING", "yellow"),
     "STOPPED": ("■ STOPPED", "grey"),
 }
@@ -114,6 +114,36 @@ _BADGES = {
 
 def badge(transport_state: str) -> tuple[str, str]:
     return _BADGES.get(transport_state, ("■ STOPPED", "grey"))
+
+
+# Width of the widest badge label ("▶ PLAYING" / "■ STOPPED" / "⟳ LOADING"),
+# so the state column lines up across the independent per-speaker rows.
+BADGE_W = max(len(text) for text, _ in _BADGES.values())
+
+
+def _fully_grouped(zones: list[ZoneState]) -> bool:
+    """True when every speaker is joined into a group — the case the 2-line
+    grouped summary describes. Any standalone speaker → show independent rows."""
+    return len(zones) > 1 and all(z.grouped for z in zones)
+
+
+def _parse_speakers(raw: Any) -> list[tuple[str, str | None]]:
+    """Parse ``[sonos] speakers`` into (ip, name_override) pairs, in config order.
+
+    Each entry is a table ``{ ip = "1.2.3.4", name = "Kitchen" }``; ``name`` is
+    optional. Entries without an ``ip`` are skipped. Non-list input yields []."""
+    out: list[tuple[str, str | None]] = []
+    if not isinstance(raw, list):
+        return out
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        ip = str(entry.get("ip", "")).strip()
+        if not ip:
+            continue
+        name = entry.get("name")
+        out.append((ip, str(name) if name else None))
+    return out
 
 
 def trunc(text: str, width: int) -> str:
@@ -180,7 +210,11 @@ class SonosController:
         self.queue_items: list[QueueItem] = []
         self.favorites: list[FavoriteItem] = []
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
-        self._order: list[str] = config.get("sonos", "speaker_order", []) or []
+        # Pinned speakers (ip, name_override) skip SSDP; empty → auto-discover.
+        self._pinned = _parse_speakers(config.get("sonos", "speakers", []))
+        self._name_overrides = {ip: name for ip, name in self._pinned if name}
+        # Household speakers seen in topology but absent from the pinned list.
+        self._new_devices: list[str] = []
         self._fast_tick = 0
 
     # -- polling (background thread) ---------------------------------------
@@ -206,6 +240,8 @@ class SonosController:
             self.error = "soco not installed"
             return False
         soco.config.REQUEST_TIMEOUT = SONOS_REQUEST_TIMEOUT  # fail fast, see constant
+        if self._pinned:
+            return self._connect_pinned(soco)
         try:
             raw = list(soco.discover(timeout=2) or [])
         except Exception as e:  # noqa: BLE001
@@ -227,15 +263,76 @@ class SonosController:
         self._poll_all()
         return True
 
+    def _connect_pinned(self, soco) -> bool:
+        """Build SoCo handles straight from the pinned IPs — no SSDP sweep.
+
+        soco.SoCo(ip) does no network I/O, so this is instant; the first
+        _poll_all() below does the real (per-device, millisecond) SOAP work.
+        Display order is the pinned order, so no player_name round-trips here."""
+        devices = []
+        for ip, _ in self._pinned:
+            try:
+                devices.append(soco.SoCo(ip))
+            except Exception:  # noqa: BLE001
+                continue
+        if not devices:
+            self.error = "no pinned Sonos speakers reachable"
+            return False
+        self._detect_unpinned(devices)
+        with self._lock:
+            self._devices = devices
+            self.discovered = True
+            self.error = ""
+        self._poll_all()
+        return True
+
+    def _detect_unpinned(self, devices: list) -> None:
+        """Flag household speakers missing from the pinned list. One speaker's
+        zone-group topology names every speaker on the network, so a single
+        visible_zones query (outside the lock) surfaces anything unpinned."""
+        pinned_ips = {ip for ip, _ in self._pinned}
+        for seed in devices:
+            try:
+                zones = list(seed.visible_zones)
+            except Exception:  # noqa: BLE001
+                continue
+            found = []
+            for z in zones:
+                ip = getattr(z, "ip_address", "")
+                if ip and ip not in pinned_ips:
+                    found.append(getattr(z, "player_name", None) or ip)
+            with self._lock:
+                self._new_devices = sorted(found)
+            return
+
+    def _display_name(self, device) -> str:
+        """The name to show for a device: the config override if pinned with one,
+        else the speaker's own Sonos room name (never raises)."""
+        ip = getattr(device, "ip_address", "")
+        if ip in self._name_overrides:
+            return self._name_overrides[ip]
+        try:
+            return device.player_name
+        except Exception:  # noqa: BLE001
+            return "Unknown"
+
+    # -- pinning / new-device accessors ------------------------------------
+    def pinned_count(self) -> int:
+        return len(self._pinned)
+
+    @property
+    def new_devices(self) -> list[str]:
+        with self._lock:
+            return list(self._new_devices)
+
+    def ack_new_devices(self) -> None:
+        with self._lock:
+            self._new_devices = []
+
     def _apply_order(self, devices: list) -> list:
-        """Order devices by the configured speaker_order; unknowns appended A→Z."""
-        if not self._order:
-            return sorted(devices, key=lambda d: d.player_name)
-        by_name = {d.player_name: d for d in devices}
-        ordered = [by_name[n] for n in self._order if n in by_name]
-        rest = sorted((d for d in devices if d.player_name not in self._order),
-                      key=lambda d: d.player_name)
-        return ordered + rest
+        """Sort auto-discovered devices alphabetically by room name (pin speakers
+        in [sonos] speakers to control the order instead)."""
+        return sorted(devices, key=lambda d: d.player_name)
 
     def _coordinator(self, device):
         try:
@@ -283,14 +380,14 @@ class SonosController:
             except Exception:  # noqa: BLE001
                 shuffle = repeat = cross_fade = False
             return ZoneState(
-                name=device.player_name,
+                name=self._display_name(device),
                 transport_state=transport.get("current_transport_state", "STOPPED"),
                 volume=device.volume, muted=device.mute,
                 grouped=grouped, queue_size=queue_size, track=track,
                 shuffle=shuffle, repeat=repeat, cross_fade=cross_fade,
             )
         except Exception:  # noqa: BLE001
-            return ZoneState(name=getattr(device, "player_name", "Unknown"))
+            return ZoneState(name=self._display_name(device))
 
     def _poll_active_fast(self) -> None:
         """Light refresh of just the active zone's transport + track."""
@@ -733,11 +830,11 @@ class SonosController:
 class SonosSystem(System):
     name = "Sonos"
     color_key = "sonos"
-    collapsed_height = 2
 
     def __init__(self):
         self.ctl = SonosController()
         self.mode = "main"  # main | queue | favorites | group_confirm | device_info
+        self._name_w = 0  # speaker-name column width, sized once state arrives
         self.queue_cursor = 0
         self.queue_scroll = 0
         self.fav_cursor = 0
@@ -751,12 +848,33 @@ class SonosSystem(System):
         self.ctl.poll(focused)
 
     # -- collapsed ---------------------------------------------------------
+    @property
+    def collapsed_height(self) -> int:
+        """Rows this panel occupies when collapsed. Dynamic so the box is sized
+        right from the very first frame — 1 while discovering, one row per pinned
+        speaker before state arrives (no jump), one row per speaker when
+        ungrouped, the 2-line summary when fully grouped."""
+        zones, _ = self.ctl.snapshot()
+        if not zones:
+            return self.ctl.pinned_count() or 1
+        if _fully_grouped(zones):
+            return 2
+        return len(zones)
+
     def collapsed_lines(self, width: int) -> list[Line]:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
-            msg = self.ctl.error or "Discovering..."
-            return [[Seg(msg, dim=True)], [Seg("")]]
+            pinned = self.ctl.pinned_count()
+            msg = self.ctl.error or ("Connecting..." if pinned else "Discovering...")
+            # Pad to the pinned row count so the panel doesn't resize once speakers populate.
+            return [[Seg(msg, dim=True)]] + [[Seg("")] for _ in range(max(0, pinned - 1))]
+        if _fully_grouped(zones):
+            return self._grouped_lines(zones, active_idx, width)
+        # Ungrouped: one independent row per speaker (like the Midea AC panel).
+        self._name_w = max(self._name_w, max(len(z.name) for z in zones))
+        return [self._independent_row(z, width) for z in zones]
 
+    def _grouped_lines(self, zones: list[ZoneState], active_idx: int, width: int) -> list[Line]:
         zone = zones[active_idx]
         label, color = badge(zone.transport_state)
         track = zone.track
@@ -765,13 +883,37 @@ class SonosSystem(System):
             detail = track.title + (f" ─ {track.artist}" if track.artist else "")
         line1 = [Seg(label, color, bold=True), Seg("  " + trunc(detail, width - len(label) - 3))]
 
-        grouped = any(z.grouped for z in zones)
         n = len(zones)
-        left = f"{n} speakers joined" if grouped else f"{n} speaker{'s' if n != 1 else ''}"
+        left = f"{n} speakers joined"
         vols = "  ".join(f"{z.name} (vol {z.volume})" for z in zones)
         line2_text = pad_between(left, vols, width)
         line2 = [Seg(line2_text[: len(left)], dim=True), Seg(line2_text[len(left):])]
+        # Stopped group → dim everything (song, room names, volumes).
+        if zone.transport_state == "STOPPED":
+            for s in (*line1, *line2):
+                s.dim = True
         return [line1, line2]
+
+    def _independent_row(self, zone: ZoneState, width: int) -> Line:
+        """One speaker's status on a single line: state badge, name, now-playing,
+        and a right-aligned volume. Song + volume dim when it isn't playing."""
+        label, color = badge(zone.transport_state)
+        playing = zone.transport_state == "PLAYING"
+        vol_text = f"vol {zone.volume}"
+        track = zone.track
+        song = ""
+        if track and track.title:
+            song = track.title + (f" ─ {track.artist}" if track.artist else "")
+        prefix_w = BADGE_W + 2 + self._name_w + 2
+        song = trunc(song, max(0, width - prefix_w - len(vol_text) - 2))
+        left: Line = [
+            Seg(f"{label:<{BADGE_W}}", color, bold=True),
+            Seg("  "),
+            Seg(f"{zone.name:<{self._name_w}}"),
+            Seg("  "),
+            Seg(song, dim=not playing),
+        ]
+        return justify(left, [Seg(vol_text, dim=not playing)], width)
 
     # -- expanded ----------------------------------------------------------
     def render_expanded(self, region: Region) -> None:
@@ -879,10 +1021,12 @@ class SonosSystem(System):
         mute = "M" if zone.muted else " "
         group = "+" if zone.grouped else " "
         cursor = Seg("▶ ", self.color, bold=True) if active else Seg("  ")
-        # Selected rows brighten the filled bar via a lighter accent (bold alone
-        # can't brighten a custom 256-colour accent); the badge label is left
-        # un-bolded here so the row-wide bolding below makes it react to selection.
-        bar_color = lighten(self.color) if active else self.color
+        # Filled bar: base yellow, brightened to a lighter yellow when selected.
+        # lighten() allocates a real lighter colour pair, so the highlight doesn't
+        # depend on the terminal rendering bold as a bright colour (heavy bar
+        # glyphs barely show bold weight anyway). Same mechanism as Hue's
+        # brightness bar, just yellow instead of the blue accent.
+        bar_color = lighten("yellow") if active else "yellow"
         segs: Line = [
             cursor,
             Seg(f"{zone.name:<16}  "),
@@ -984,10 +1128,29 @@ class SonosSystem(System):
             "and your Sonos Favorites. Speakers are discovered automatically "
             "on the LAN. (Local library serving, streaming service "
             "integration, and EQ editing aren't ported yet.)",
-            "Config: [sonos] speaker_order sets the top-to-bottom display "
-            "order using exact Sonos room names; leave it empty to sort "
-            "alphabetically.",
+            "Config: [sonos] speakers pins speakers by IP — each entry is "
+            "{ ip = \"...\", name = \"...\" } — to skip the ~2s SSDP discovery "
+            "and connect instantly; the list order is the display order and the "
+            "optional name overrides the speaker's own room name. If additional "
+            "speakers are broadcast within the same system as the pinned "
+            "speakers, a popup will alert the user about additional devices "
+            "being available. If nothing is pinned in the config, speakers are "
+            "auto-discovered and listed alphabetically.",
         ]
+
+    # -- modal alerts ------------------------------------------------------
+    def pending_popup(self) -> Popup | None:
+        names = self.ctl.new_devices
+        if not names:
+            return None
+        lines = ["These Sonos speakers are on your network but",
+                 "aren't pinned in [sonos] speakers:", ""]
+        lines += [f"  • {n}" for n in names]
+        lines += ["", "Add them to your config to control them here."]
+        return Popup(title="Unpinned Sonos speakers", lines=lines)
+
+    def dismiss_popup(self) -> None:
+        self.ctl.ack_new_devices()
 
     # -- input -------------------------------------------------------------
     def handle_key(self, key: int) -> bool:

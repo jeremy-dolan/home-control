@@ -26,6 +26,22 @@ STATUS_TTL = 4.0
 
 
 @dataclass
+class Popup:
+    """A modal alert the shell renders over everything until dismissed.
+
+    A System returns one from ``pending_popup()`` when it needs to interrupt the
+    user (e.g. Sonos found a speaker not pinned in config). The shell draws it
+    centered with an accent border and a "press ENTER to close" footer; ENTER
+    calls ``dismiss_popup()`` and other keys are swallowed, so the alert can't be
+    typed past by accident. ``color`` defaults to the system's accent when blank.
+    """
+
+    title: str
+    lines: list[str]
+    color: str = ""
+
+
+@dataclass
 class VoiceAction:
     """One voice-callable action a System exposes to the NLU layer.
 
@@ -97,6 +113,16 @@ class System(ABC):
         """
         for i, line in enumerate(self.collapsed_lines(region.width)):
             region.segs(i, line)
+
+    # Modal alerts (shell-level, focus-independent) ------------------------
+    def pending_popup(self) -> Popup | None:
+        """A modal the shell should render over everything until dismissed, or
+        None when there's nothing to show. Checked every frame for every system,
+        not just the focused one, so a background poll can raise an alert."""
+        return None
+
+    def dismiss_popup(self) -> None:
+        """Acknowledge the current `pending_popup()`; called when the user hits ENTER."""
 
     def toolbar(self) -> str:
         """Per-system key hints shown above the global toolbar while focused."""

@@ -125,9 +125,20 @@ class Shell:
         self._render_global_toolbar(stdscr, h, w)
         if self.show_help:
             self._render_help(stdscr, h, w, focused_slot)
+        popup_sys = self._popup_system()
+        if popup_sys is not None:
+            self._render_popup(stdscr, h, w, popup_sys)
         if self.voice.active():
             self._render_voice(stdscr, h, w)
         stdscr.refresh()
+
+    def _popup_system(self) -> System | None:
+        """First system with a pending modal alert (checked for every system,
+        not just the focused one), or None."""
+        for system in self.systems:
+            if system.pending_popup() is not None:
+                return system
+        return None
 
     def _render_status_line(self, stdscr: curses.window, h: int, w: int) -> None:
         msg = self.systems[self.focused].status()
@@ -165,6 +176,23 @@ class Shell:
                           system.color, focused=True)
         for i, text in enumerate(rows):
             region.text(i, 0, text)
+        region.text(len(rows) + 1, max(0, (inner - len(footer)) // 2), footer, dim=True)
+
+    def _render_popup(self, stdscr: curses.window, h: int, w: int, system: System) -> None:
+        popup = system.pending_popup()
+        if popup is None:
+            return
+        bw = min(HELP_WIDTH, w - 10)
+        inner = bw - 4
+        rows = ["", *popup.lines]  # blank line buffer below the title border
+        footer = "press ENTER to close"
+        bh = len(rows) + 4  # borders + blank separator + footer
+        top = max(0, (h - bh) // 2)
+        left = max(0, (w - bw) // 2)
+        color = popup.color or system.color
+        region = draw_box(stdscr, top, left, bh, bw, popup.title, color, focused=True)
+        for i, text in enumerate(rows):
+            region.text(i, 0, text[:inner])
         region.text(len(rows) + 1, max(0, (inner - len(footer)) // 2), footer, dim=True)
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
@@ -233,6 +261,12 @@ class Shell:
         """Process one key. Return True to quit."""
         if self.voice.active():  # voice overlay captures all keys while open
             self.voice.feed_key(key)
+            return False
+
+        popup_sys = self._popup_system()  # modal alert: ENTER dismisses; other keys ignored
+        if popup_sys is not None:
+            if key in (ord("\n"), curses.KEY_ENTER):
+                popup_sys.dismiss_popup()
             return False
 
         if self.show_help:  # any key dismisses help; nothing else happens

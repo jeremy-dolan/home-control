@@ -27,14 +27,15 @@ def test_config_get_and_empty_as_unset(tmp_path, monkeypatch):
     cfg.write_text(
         '[hue]\nbridge_ip = "10.0.0.5"\n\n'
         '[roku]\nip = ""\n\n'
-        '[sonos]\nspeaker_order = ["Kitchen", "Den"]\n'
+        '[sonos]\nspeakers = [{ ip = "192.168.1.60" }, { ip = "192.168.1.61", name = "Kitchen" }]\n'
     )
     monkeypatch.setattr(config, "CONFIG_PATH", cfg)
     monkeypatch.setattr(config, "_cache", None)
 
     assert config.get("hue", "bridge_ip") == "10.0.0.5"
     assert config.get("roku", "ip", "AUTO") == "AUTO"          # empty string → default
-    assert config.get("sonos", "speaker_order") == ["Kitchen", "Den"]
+    assert config.get("sonos", "speakers") == [
+        {"ip": "192.168.1.60"}, {"ip": "192.168.1.61", "name": "Kitchen"}]
     assert config.get("midea", "missing", 42) == 42            # absent section → default
 
 

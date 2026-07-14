@@ -58,8 +58,8 @@ def test_int_slider_has_dot_and_centre_tick():
 
 
 def test_sonos_badge():
-    assert sonos.badge("PLAYING") == ("▶ PLAYING", "green")
-    assert sonos.badge("PAUSED_PLAYBACK")[0].startswith("⏸")
+    assert sonos.badge("PLAYING") == ("▶ PLAYING", "yellow")
+    assert sonos.badge("PAUSED_PLAYBACK") == ("⏸ PAUSED", "grey")
     assert sonos.badge("STOPPED") == ("■ STOPPED", "grey")
 
 
@@ -82,6 +82,7 @@ def test_discover_resolves_order_without_holding_lock(monkeypatch):
 
     ctl = sonos.SonosController()
     ctl.mock = False
+    ctl._pinned = []  # force the discovery path regardless of the ambient config
     monkeypatch.setattr(soco, "discover", lambda timeout=2: ["devA", "devB"])
     monkeypatch.setattr(ctl, "_poll_all", lambda: None)
 
@@ -109,6 +110,80 @@ def test_discover_resolves_order_without_holding_lock(monkeypatch):
     assert ctl._discover() is True
     assert ctl.discovered is True
     assert lock_free["value"] is True  # lock was NOT held during player_name resolution
+
+
+def test_parse_speakers():
+    parse = sonos._parse_speakers
+    assert parse([]) == []
+    assert parse(None) == []  # non-list → empty
+    # ip-only, and name override; config order is preserved.
+    assert parse([{"ip": "192.168.1.60"},
+                  {"ip": "192.168.1.61", "name": "Kitchen"}]) == [
+        ("192.168.1.60", None), ("192.168.1.61", "Kitchen")]
+    # entries without an ip (or non-dict) are dropped; ip is stripped.
+    assert parse([{"name": "no ip"}, "junk", {"ip": " 10.0.0.5 "}]) == [("10.0.0.5", None)]
+
+
+def _zone(name, state="PLAYING", vol=30, grouped=False, title="", artist=""):
+    track = sonos.TrackInfo(title=title, artist=artist) if title else None
+    return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track)
+
+
+def test_fully_grouped():
+    assert sonos._fully_grouped([_zone("A", grouped=True), _zone("B", grouped=True)])
+    assert not sonos._fully_grouped([_zone("A", grouped=True), _zone("B", grouped=False)])
+    assert not sonos._fully_grouped([_zone("A", grouped=True)])  # single speaker isn't "grouped"
+    assert not sonos._fully_grouped([])
+
+
+def test_collapsed_height_dynamic():
+    s = sonos.SonosSystem()
+    s.ctl._pinned = []  # ignore any ambient config so the no-pins case is deterministic
+    # No state yet: 1 row while discovering, one row per pinned speaker otherwise.
+    assert s.collapsed_height == 1
+    s.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}, {"ip": "1.1.1.2"}])
+    assert s.collapsed_height == 2
+    # Ungrouped → one row per speaker; fully grouped → the 2-line summary.
+    s.ctl.zones = [_zone("A"), _zone("B"), _zone("C")]
+    assert s.collapsed_height == 3
+    s.ctl.zones = [_zone("A", grouped=True), _zone("B", grouped=True)]
+    assert s.collapsed_height == 2
+
+
+def _row_text(line):
+    return "".join(seg.text for seg in line)
+
+
+def test_independent_row_layout_and_dimming():
+    s = sonos.SonosSystem()
+    s._name_w = len("Living Room")
+    playing = s._independent_row(
+        _zone("Living Room", "PLAYING", 35, title="Shake It Off", artist="Taylor Swift"), width=70)
+    text = _row_text(playing)
+    # Badge padded to the widest label, name padded to the column, song + right vol present.
+    assert text.startswith("▶ PLAYING".ljust(sonos.BADGE_W) + "  Living Room  ")
+    assert "Shake It Off ─ Taylor Swift" in text
+    assert text.rstrip().endswith("vol 35")
+    # Playing → song + volume are NOT dimmed.
+    assert not any(seg.dim for seg in playing if "Shake" in seg.text or seg.text == "vol 35")
+    # Paused → song + volume dim; the badge still carries its own colour.
+    paused = s._independent_row(_zone("Kitchen", "PAUSED_PLAYBACK", 20, title="Damaged Goods"), width=70)
+    dimmed = {seg.text: seg.dim for seg in paused}
+    assert dimmed["vol 20"] is True
+    assert any(seg.dim and "Damaged Goods" in seg.text for seg in paused)
+
+
+def test_pending_popup_lists_unpinned():
+    s = sonos.SonosSystem()
+    assert s.pending_popup() is None
+    s.ctl._new_devices = ["Bedroom", "Office"]
+    popup = s.pending_popup()
+    assert popup is not None
+    body = "\n".join(popup.lines)
+    assert "Bedroom" in body and "Office" in body
+    # Dismissal acknowledges (clears) the alert.
+    s.dismiss_popup()
+    assert s.pending_popup() is None
 
 
 # --- Roku --------------------------------------------------------------------
