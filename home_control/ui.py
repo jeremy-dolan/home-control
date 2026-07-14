@@ -8,7 +8,23 @@ systems/. Keeping curses confined here keeps the rest of the app headless-testab
 from __future__ import annotations
 
 import curses
+import textwrap
 from dataclasses import dataclass
+
+
+def wrap(text: str, width: int, max_lines: int | None = None) -> list[str]:
+    """Word-wrap `text` to `width` columns, returning a list of lines.
+
+    The single wrapping primitive shared by `Region.text_wrapped()` (which draws
+    the lines) and callers that build styled `Seg`/`Line` rows themselves. Long
+    unbroken tokens (URLs, `HTTPConnectionPool(...)` blobs) are hard-broken so a
+    message is never silently truncated off the right edge. Never returns empty:
+    a blank/whitespace `text` yields `[text]`. Caps to `max_lines` when given.
+    """
+    lines = textwrap.wrap(text, width=max(1, width),
+                          break_long_words=True, break_on_hyphens=False) or [text]
+    return lines[:max_lines] if max_lines is not None else lines
+
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -309,6 +325,26 @@ class Region:
         except curses.error:
             pass
         return col + len(s)
+
+    def text_wrapped(self, row: int, col: int, s: str, color: str = "", *, bold: bool = False,
+                     dim: bool = False, max_rows: int | None = None) -> int:
+        """Word-wrap `s` to the region width and draw it starting at (row, col).
+
+        A drawing wrapper around `wrap()`: long unbroken tokens (URLs,
+        `HTTPConnectionPool(...)` blobs) are hard-broken so nothing is silently
+        truncated off the right edge — the whole message is readable, which
+        single-line `text()` can't guarantee. Stops at the region bottom (or
+        after `max_rows` lines). Returns the next free row.
+        """
+        avail = self.width - col
+        if avail <= 0 or row >= self.height:
+            return row
+        room = self.height - row
+        limit = room if max_rows is None else min(room, max_rows)
+        for line in wrap(s, avail, limit):
+            self.text(row, col, line, color, bold=bold, dim=dim)
+            row += 1
+        return row
 
     def segs(self, row: int, line: Line, col: int = 0) -> None:
         """Write a list of styled segments on a single row."""

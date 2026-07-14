@@ -774,7 +774,7 @@ class SonosSystem(System):
     def _render_main(self, region: Region) -> None:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
-            region.text(0, 0, self.ctl.error or "Discovering speakers...", dim=True)
+            region.text_wrapped(0, 0, self.ctl.error or "Discovering speakers...", dim=True)
             return
 
         y = 0

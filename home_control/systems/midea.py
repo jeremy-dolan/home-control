@@ -38,7 +38,6 @@ import curses
 import dataclasses
 import json
 import os
-import textwrap
 import threading
 import time
 from dataclasses import dataclass
@@ -53,7 +52,7 @@ from midealocal.devices.ac import MideaACDevice
 from midealocal.discover import discover as midea_discover
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, justify
+from ..ui import Line, Region, Seg, hint, hint_row, justify, wrap
 from .base import System, VoiceAction
 
 # Minimum gap between discovery attempts. A failure here can be a cloud-side
@@ -656,8 +655,7 @@ class MideaSystem(System):
         units = self._units()
         if not units:
             msg = self.ctl.error or "Discovering..."
-            wrapped = textwrap.wrap(msg, max(10, width)) or [msg]
-            return [[Seg(line, dim=True)] for line in wrapped[:_STATUS_WRAP_LINES]]
+            return [[Seg(line, dim=True)] for line in wrap(msg, max(10, width), _STATUS_WRAP_LINES)]
         return [self._unit_row(u, width) for u in units]
 
     def _unit_row(self, u: MideaUnit, width: int) -> Line:
@@ -675,11 +673,7 @@ class MideaSystem(System):
         units = self._units()
         if not units:
             msg = self.ctl.error or "Discovering units..."
-            wrapped = textwrap.wrap(msg, max(10, region.width)) or [msg]
-            for i, line in enumerate(wrapped):
-                if i >= region.height:
-                    break
-                region.text(i, 0, line, dim=True)
+            region.text_wrapped(0, 0, msg, dim=True)
             return
         online = self._online_units()
         selected_id = None

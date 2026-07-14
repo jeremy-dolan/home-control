@@ -889,7 +889,7 @@ class HueSystem(System):
         if not self.ctl.connected:
             if self.ctl.error:
                 region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "red", bold=True)
-                region.text(1, 0, self.ctl.error, dim=True)
+                region.text_wrapped(1, 0, self.ctl.error, dim=True)
             else:
                 region.text(0, 0, f"Connecting to {self.ctl.ip}...", dim=True)
             return
