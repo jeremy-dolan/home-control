@@ -575,7 +575,7 @@ class RokuSystem(System):
         self._zone(region, play_top, mid, "Volume", _VOLUME_KEYS)
 
         # Right column: Apps — letter shortcuts, then digit-assigned installed
-        # apps, with "a  all apps..." pinned after a blank row.
+        # apps, with "a  all apps…" pinned after a blank row.
         row = _GRID_TOP
         region.text(row, rgt, "Apps", self.color, bold=True)
         row += 1
@@ -590,7 +590,7 @@ class RokuSystem(System):
             region.text(row, rgt + 4, app_name)
             row += 1
         region.text(row + 1, rgt + 1, "a", bold=True)
-        region.text(row + 1, rgt + 4, "all apps...")
+        region.text(row + 1, rgt + 4, "all apps…")
 
     def _render_input_box(self, region: Region, title: str, caption: str,
                           hints: str, note: str = "") -> None:
@@ -602,13 +602,13 @@ class RokuSystem(System):
         box_w = min(60, region.width - 8)
         inner = box_w - 2
         # Fill the interior as one fixed-width string with a 1-col inset on both
-        # sides (" text▌ "); tail-truncate with a leading "..." when it overflows
+        # sides (" text▌ "); tail-truncate with a leading "…" when it overflows
         # so the marker never crowds the left border nor the cursor the right one.
         cursor = "▌"
         max_text = inner - 3  # 1 left space + text + cursor + 1 right space
         text = self.typed
         if len(text) > max_text:
-            text = "..." + text[-(max_text - 3):]
+            text = "…" + text[-(max_text - 1):]
         interior = " " + text + cursor
         interior += " " * (inner - len(interior))
         top = _GRID_TOP + 2
