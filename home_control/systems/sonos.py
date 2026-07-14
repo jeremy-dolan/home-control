@@ -31,6 +31,13 @@ from .. import config
 from ..ui import Line, Region, Seg, lighten, pad_between, select_row
 from .base import System
 
+# SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
+# milliseconds, but when a speaker responds to SSDP discovery yet its control
+# port (1400) isn't reachable — e.g. the laptop on WiFi, the speakers wired —
+# every SOAP call blocks for the full timeout. Fail fast instead (matches Hue's
+# CONNECT_TIMEOUT) so a background retry is cheap, not a multi-second wedge.
+SONOS_REQUEST_TIMEOUT = 4
+
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
@@ -193,10 +200,12 @@ class SonosController:
 
     def _discover(self) -> bool:
         try:
-            import soco  # lazy: app runs without soco installed
+            import soco
+            import soco.config  # lazy: app runs without soco installed
         except ImportError:
             self.error = "soco not installed"
             return False
+        soco.config.REQUEST_TIMEOUT = SONOS_REQUEST_TIMEOUT  # fail fast, see constant
         try:
             raw = list(soco.discover(timeout=2) or [])
         except Exception as e:  # noqa: BLE001
@@ -205,8 +214,14 @@ class SonosController:
         if not raw:
             self.error = "no Sonos devices found"
             return False
+        # Resolve ordering OUTSIDE the lock: each d.player_name is a live SoCo
+        # property that fires a SOAP request, so holding self._lock across it would
+        # block the main thread's snapshot() — and thus every render frame — for the
+        # whole request timeout. The poll-thread contract is: never hold the lock
+        # during network I/O.
+        ordered = self._apply_order(raw)
         with self._lock:
-            self._devices = self._apply_order(raw)
+            self._devices = ordered
             self.discovered = True
             self.error = ""
         self._poll_all()

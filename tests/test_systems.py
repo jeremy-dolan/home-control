@@ -1,5 +1,6 @@
 """Headless tests for pure helpers across the system modules (no curses init)."""
 
+import threading
 from types import SimpleNamespace
 
 from home_control.systems import hue, roku, sonos
@@ -70,6 +71,44 @@ def test_sonos_trunc():
     assert sonos.trunc("hello world", 3) == "..."     # too narrow for text + marker
     assert sonos.trunc("hello world", 0) == ""
     assert sonos.trunc("hello world", -1) == ""
+
+
+def test_discover_resolves_order_without_holding_lock(monkeypatch):
+    """Regression: _apply_order resolves d.player_name, a live SoCo property that
+    fires a SOAP request. It must run OUTSIDE self._lock — else a speaker that's
+    reachable by SSDP but not on its control port (laptop on WiFi) blocks the main
+    thread's snapshot() for the whole request timeout, freezing the TUI at idle."""
+    import soco
+
+    ctl = sonos.SonosController()
+    ctl.mock = False
+    monkeypatch.setattr(soco, "discover", lambda timeout=2: ["devA", "devB"])
+    monkeypatch.setattr(ctl, "_poll_all", lambda: None)
+
+    lock_free: dict[str, bool] = {}
+
+    def fake_apply_order(devices: list) -> list:
+        # From another thread, is the RLock takeable while _apply_order runs? It is
+        # only if _discover isn't holding it across this (networked) call.
+        got: list[bool] = []
+
+        def probe() -> None:
+            acquired = ctl._lock.acquire(blocking=False)
+            got.append(acquired)
+            if acquired:
+                ctl._lock.release()
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        lock_free["value"] = got[0]
+        return list(devices)
+
+    monkeypatch.setattr(ctl, "_apply_order", fake_apply_order)
+
+    assert ctl._discover() is True
+    assert ctl.discovered is True
+    assert lock_free["value"] is True  # lock was NOT held during player_name resolution
 
 
 # --- Roku --------------------------------------------------------------------
