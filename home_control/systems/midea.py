@@ -727,7 +727,7 @@ class MideaSystem(System):
             # "connecting…" while we've never reached it; "unreachable" only
             # once we had it and lost contact (so the card's dimmed values are
             # real last-known state, not defaults).
-            status = "unreachable" if u.contacted else "connecting…"
+            status = "unreachable" if u.contacted else "connecting..."
             return [cursor, Seg(label, color), Seg(f"  {u.name} ({status})")]
         left: Line = [cursor, Seg(label, color, bold=(color == "midea_teal")), Seg(f"  {u.name}")]
         right: Line = []
