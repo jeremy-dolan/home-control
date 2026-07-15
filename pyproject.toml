@@ -2,22 +2,31 @@
 name = "home-control"
 version = "0.1.0"
 description = "Unified interface (TUI and voice mode) for controlling home devices (Hue, Roku, Sonos, router, Yoto, Midea...)"
-requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Jeremy Dolan" },
+]
+requires-python = ">=3.12"
 dependencies = [
     # Hue. httpx is needed for Hue v2 effects.
     "phue2>=0.0.4",
     "httpx>=0.27",
     # Sonos
     "soco>=0.30",
-    "ytmusicapi>=1.7",
+    #"ytmusicapi>=1.7",
     # Voice control: NLU via the Claude API (tool-calling).
-    "anthropic>=0.40",
+    "anthropic>=0.100",
     # Midea AC: local-LAN control via midea-local (import name `midealocal`),
     # the extracted core of the Home Assistant midea_ac_lan integration.
     "midea-local>=6.10.0",
     # midea-local imports typing_extensions.deprecated but doesn't declare it.
     "typing_extensions>=4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jeremy-dolan/home-control"
 
 [project.optional-dependencies]
 dev = ["ruff", "pyright", "pytest"]
