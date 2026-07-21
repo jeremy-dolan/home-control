@@ -36,8 +36,11 @@ hiding by using IDLE as a default.
 Finally, ■ IDLE should be in grey, not purple, and we should substitute "Roku
 Dynamic Menu" for something less branded and wordy. Maybe "Home"?
 
-## add example config CI
-add a test to ensure example config doesn't drift, and setup CI on GH
+## add tests/CI for docs sync
+we've added a test to ensure example config doesn't drift, but still need one
+for in-app help vs. README.md
+
+setup CI on GH
 
 ## have claude investigate linting issues
 I think we have a bunch of unrefered vars
