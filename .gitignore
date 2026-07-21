@@ -8,7 +8,11 @@ __pycache__/
 build/
 dist/
 .DS_Store
-/.claude/
+# Claude Code: share the checked-in skills/settings, keep machine-local
+# state (permission grants, agent worktrees) out of the repo.
+/.claude/*
+!/.claude/skills/
+!/.claude/settings.json
 
 # Prototype/scratch trees not part of the shipped package
 /dev/
