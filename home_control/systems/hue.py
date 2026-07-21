@@ -804,6 +804,7 @@ class HueController:
             "mac": "ec:b5:fa:bf:6b:24", "swversion": "1969113040",
             "apiversion": "1.65.0", "zigbeechannel": 25,
             "timezone": "America/New_York",
+            "UTC": "2026-07-21T13:00:00", "localtime": "2026-07-21T09:00:00",
             "swupdate2": {"bridge": {"state": "noupdates"}},
             "internetservices": {"internet": "connected"},
             "whitelist": {"a": {"name": "home-control#dev",
@@ -1143,6 +1144,7 @@ class HueSystem(System):
         kv("API version", cfg.get("apiversion", "?"))
         kv("ZigBee channel", cfg.get("zigbeechannel", "?"))
         kv("Timezone", cfg.get("timezone", "?"))
+        kv("Bridge time", cfg.get("localtime", "?"))
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
         kv("Internet", cfg.get("internetservices", {}).get("internet", "?"))
 
