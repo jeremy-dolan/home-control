@@ -50,8 +50,11 @@ Gotchas:
   cards show `Mode Auto Cool Dry Fan`); beware false matches — Hue and
   Sonos also list rooms named "Living Room"/"Bedroom".
 - `?` opens the help overlay, ESC closes it. `q` quits.
-- Midea: ↕/j/k select unit, ENTER toggles power (mock state flips
-  in-memory — safe), ←→ nudges temp, digits enter temp-entry mode.
+- Every panel is safe to drive under `HOME_CONTROL_MOCK=1` — writes
+  short-circuit into the in-memory fixture and never reach hardware. The
+  focused panel's key hints render in its own toolbar, so they're already in
+  your pane capture; `handle_key()` in the system's module is authoritative
+  for anything the toolbar elides.
 
 ## Cleanup
 
