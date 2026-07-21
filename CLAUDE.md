@@ -117,9 +117,6 @@ user explicitly asking.
   <129558107+jeremy-dolan@users.noreply.github.com>` — GitHub's
   privacy-preserving noreply alias, not a real email. Don't override with a
   real address.
-- Commits made by Claude should credit itself via a `Co-Authored-By: Claude
-  <noreply@anthropic.com>` trailer, not by setting the git author identity to
-  "Claude" — the human stays the commit author of record.
 - `dev/`, `standalone-apps/`, `plugins/`, `README.ideas` are gitignored on
   purpose (see Directory map above) — don't `git add -f` them without
   checking with the user first.
