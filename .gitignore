@@ -8,7 +8,11 @@ __pycache__/
 build/
 dist/
 .DS_Store
-/.claude/
+# Claude Code: ignore machine-local state (permission grants, agent worktrees)
+/.claude/*
+# ...but share skills/settings
+!/.claude/skills/
+!/.claude/settings.json
 
 # Prototype/scratch trees not part of the shipped package
 /dev/

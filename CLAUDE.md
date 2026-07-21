@@ -117,12 +117,15 @@ user explicitly asking.
   <129558107+jeremy-dolan@users.noreply.github.com>` — GitHub's
   privacy-preserving noreply alias, not a real email. Don't override with a
   real address.
-- Commits made by Claude should credit itself via a `Co-Authored-By: Claude
-  <noreply@anthropic.com>` trailer, not by setting the git author identity to
-  "Claude" — the human stays the commit author of record.
-- `dev/`, `standalone-apps/`, `plugins/`, `README.ideas`, `.claude/` are
-  gitignored on purpose (see Directory map above) — don't `git add -f` them
-  without checking with the user first.
+- `dev/`, `standalone-apps/`, `plugins/`, `README.ideas` are gitignored on
+  purpose (see Directory map above) — don't `git add -f` them without
+  checking with the user first.
+- `.claude/` is partly tracked: `.claude/skills/` and `.claude/settings.json`
+  are shared (they're project tooling everyone benefits from), everything
+  else under it is ignored — `settings.local.json` is per-machine permission
+  grants, `worktrees/` is agent scratch space. Keep skills checkout-agnostic
+  (derive paths from git, don't hardcode `/home/<user>/...`) so they work
+  from a worktree.
 
 ## Keeping this file current
 
