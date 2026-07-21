@@ -1205,7 +1205,7 @@ class HueSystem(System):
             elif style == "unreachable":
                 region.text(top + i, 0, text, "light_grey")
             elif style == "warn":
-                region.text(top + i, 0, text, "red", bold=True)
+                region.text(top + i, 0, text, "red")
             else:
                 region.text(top + i, 0, text)
 
