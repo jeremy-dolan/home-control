@@ -46,7 +46,7 @@ include = ["home_control"]
 # Resolve imports from the project venv (anthropic, soco, httpx, ...).
 venvPath = "."
 venv = ".venv"
-pythonVersion = "3.11"  # tomllib (config.py) is stdlib from 3.11
+pythonVersion = "3.12"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
 useLibraryCodeForTypes = true
