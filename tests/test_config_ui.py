@@ -1,5 +1,7 @@
 """Tests for config loading and color-resolution helpers (no curses init)."""
 
+from pathlib import Path
+
 from home_control import config, ui
 
 
@@ -46,3 +48,14 @@ def test_config_autocreates(tmp_path, monkeypatch):
     # Reading a missing config writes the template and still parses.
     assert config.get("hue", "bridge_ip") == "192.168.1.99"
     assert cfg.exists()
+
+
+def test_default_template_matches_example_file():
+    """`config._DEFAULT_TEMPLATE` is what a fresh install gets written; the
+    repo's config.example.toml is what users read. CLAUDE.md calls out that
+    they must stay byte-identical and that nothing enforced it — this does."""
+    example = Path(__file__).resolve().parent.parent / "config.example.toml"
+    assert config._DEFAULT_TEMPLATE == example.read_text(), (
+        "config.example.toml and config._DEFAULT_TEMPLATE have diverged — "
+        "edit both, they must match byte for byte"
+    )

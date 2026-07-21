@@ -146,7 +146,7 @@ def brightness_bar(bri: int, on: bool, color: str = "", width: int = BAR_WIDTH) 
     if not on:
         return [Seg("─" * width, dim=True)]
     f = max(1, min(width, round(bri / 254 * width)))
-    return [Seg("━" * (f - 1) + "●", color), Seg("─" * (width - f), dim=True)]
+    return [Seg("━" * (f - 1) + "◉", color), Seg("─" * (width - f), dim=True)]
 
 
 # ---------------------------------------------------------------------------
@@ -1214,9 +1214,9 @@ class HueSystem(System):
             hint("↕", "nav", self.color),
             hint("←→", "bri", self.color),
             hint("ENTER", "on/off", self.color),
-            hint("s", "cenes", self.color, paren=True),
-            hint("d", "etails", self.color, paren=True),
-            hint("b", "ridge info", self.color, paren=True),
+            hint("s", "scenes", self.color, paren=True),
+            hint("d", "details", self.color, paren=True),
+            hint("b", "bridge info", self.color, paren=True),
         )
 
     def _scenes_toolbar_hints(self) -> Line:
@@ -1245,17 +1245,6 @@ class HueSystem(System):
             hint("↕/PgUp/PgDn", "scroll", self.color),
             hint("b/ESC", "back", self.color),
         )
-
-    def toolbar(self) -> str:
-        if self.mode == "scenes":
-            return "↕ nav   ENTER activate   s/ESC back"
-        if self.mode == "device":
-            if self._num_buf is not None:
-                return "type value   ENTER set   ESC cancel"
-            return "↕ nav   ←→ adjust   ENTER edit/toggle   d/ESC back"
-        if self.mode == "sysinfo":
-            return "↕/PgUp/PgDn scroll   b/ESC back"
-        return "".join(s.text for s in self._list_toolbar_hints())
 
     def toolbar_line(self) -> Line | None:
         if self.mode == "scenes":

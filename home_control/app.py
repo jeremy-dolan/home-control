@@ -234,19 +234,13 @@ class Shell:
             region.segs(VOICE_BODY_LINES + 1, hint_line, col)
 
     def _render_focused(self, stdscr: curses.window, system: System, region: Region) -> None:
-        toolbar = system.toolbar()
         toolbar_line = system.toolbar_line()
-        has_toolbar = bool(toolbar_line) if toolbar_line is not None else bool(toolbar)
-        body_h = region.height - 1 if has_toolbar else region.height
+        body_h = region.height - 1 if toolbar_line else region.height
         body = Region(stdscr, region.top, region.left, max(0, body_h), region.width)
         system.render_expanded(body)
-        if has_toolbar and region.height >= 2:
-            if toolbar_line is not None:
-                col = max(0, (region.width - seg_len(toolbar_line)) // 2)
-                region.segs(region.height - 1, toolbar_line, col)
-            else:
-                col = max(0, (region.width - len(toolbar)) // 2)
-                region.text(region.height - 1, col, toolbar, system.color)
+        if toolbar_line and region.height >= 2:
+            col = max(0, (region.width - seg_len(toolbar_line)) // 2)
+            region.segs(region.height - 1, toolbar_line, col)
 
     def _render_global_toolbar(self, stdscr: curses.window, h: int, w: int) -> None:
         row = layout.toolbar_row(h)

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
-from ..ui import Line, Region, Seg, justify, lighten, pad_between, select_row
+from ..ui import Line, Region, Seg, hint, hint_row, justify, lighten, pad_between, select_row
 from .base import Popup, System
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
@@ -1108,17 +1108,61 @@ class SonosSystem(System):
             region.text(2 + i, 0, ln)
         region.text(2 + len(lines) + 1, 0, "ENTER confirm    ESC cancel", dim=True)
 
-    def toolbar(self) -> str:
+    def _main_toolbar_hints(self) -> Line:
+        return hint_row(
+            hint("↕", "nav", self.color),
+            hint("←→", "vol", self.color),
+            hint("ENTER", "play/pause", self.color),
+            hint("[ ]", "skip", self.color),
+            hint("S", "stop", self.color, paren=True),
+            hint("m", "mute", self.color, paren=True),
+            hint("u", "queue", self.color, paren=True),
+            hint("f", "fav", self.color, paren=True),
+            hint("g", "group", self.color, paren=True),
+            hint("d", "device", self.color, paren=True),
+            sep="  ",
+        )
+
+    def _queue_toolbar_hints(self) -> Line:
+        return hint_row(
+            hint("↕", "nav", self.color),
+            hint("ENTER", "play", self.color),
+            hint("r", "remove", self.color, paren=True),
+            hint("C", "clear", self.color, paren=True),
+            hint("ESC", "back", self.color),
+        )
+
+    def _favorites_toolbar_hints(self) -> Line:
+        return hint_row(
+            hint("↕", "nav", self.color),
+            hint("ENTER", "play", self.color),
+            hint("ESC", "back", self.color),
+        )
+
+    def _group_toolbar_hints(self) -> Line:
+        return hint_row(
+            hint("ENTER", "confirm", self.color),
+            hint("ESC", "cancel", self.color),
+        )
+
+    def _device_info_toolbar_hints(self) -> Line:
+        return hint_row(
+            hint("↕", "nav", self.color),
+            hint("←→", "adjust", self.color),
+            hint("ENTER", "toggle", self.color),
+            hint("ESC", "back", self.color),
+        )
+
+    def toolbar_line(self) -> Line | None:
         if self.mode == "queue":
-            return "↕ nav   ENTER play   r remove   C clear   ESC back"
+            return self._queue_toolbar_hints()
         if self.mode == "favorites":
-            return "↕ nav   ENTER play   ESC back"
+            return self._favorites_toolbar_hints()
         if self.mode == "group_confirm":
-            return "ENTER confirm   ESC cancel"
+            return self._group_toolbar_hints()
         if self.mode == "device_info":
-            return "↕ nav   ←→ adjust   ENTER toggle   ESC back"
-        return ("↕ speaker  ←→ vol  ENTER play/pause  [] skip  m mute  "
-                "u queue  f fav  g group  d device")
+            return self._device_info_toolbar_hints()
+        return self._main_toolbar_hints()
 
     def help_notes(self) -> list[str]:
         # Keep in sync with the Sonos entry in README.md "Device support".
@@ -1300,7 +1344,7 @@ class SonosSystem(System):
             self._adjust_field(-1)
         elif key in (curses.KEY_RIGHT, ord("+"), ord("=")):
             self._adjust_field(1)
-        elif key in (ord("\n"), curses.KEY_ENTER, ord(" ")):
+        elif key in (ord("\n"), curses.KEY_ENTER):
             f = rows[self.info_cursor]
             if f.kind == "bool":
                 self._adjust_field(1)

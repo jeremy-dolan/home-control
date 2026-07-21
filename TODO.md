@@ -1,10 +1,48 @@
 # TODO
 
-Known follow-up work, roughly in priority order.
+Known follow-up work.
 
 ## redo hotkeys for Sonos panel
 
 Stop isn't currently available and the status bar is a mess
+
+## Security
+
+Midea token/key material is written to a JSON cache without explicitly setting
+restrictive permissions, and the main config may hold plaintext router, Midea,
+and Anthropic credentials. On a normal modern macOS setup the parent
+directories are usually user-private, but the code should enforce 0600 itself.
+
+see also: https://chatgpt.com/c/6a56a686-1e48-83ea-8eff-301762040029
+
+## Roku badge work
+
+■ IDLE    Roku Dynamic Menu   <-- when collapsed
+■ IDLE      Roku Dynamic Menu <-- when expanded
+
+if we add one to the collapsed, and remove one from expanded, it will align
+with the display for Sonos.  Not sure if aesthetically aligning is good, or
+"too straigtht"
+
+There's also this comment:
+
+def badge(state: str) -> tuple[str, bool]:
+    """(label, dim) for a media-player state; unknown/idle states get IDLE."""
+    return _BADGE.get(state, ("■ IDLE", False))
+
+I would be curious to know more about what the 'unknown' states are, that we're
+hiding by using IDLE as a default.
+
+Finally, ■ IDLE should be in grey, not purple, and we should substitute "Roku
+Dynamic Menu" for something less branded and wordy. Maybe "Home"?
+
+## add example config CI
+add a test to ensure example config doesn't drift, and setup CI on GH
+
+## have claude investigate linting issues
+I think we have a bunch of unrefered vars
+
+## add Roku to demo GIF
 
 
 ## Keep grouped speakers' status in sync on the expanded panel
@@ -145,3 +183,22 @@ One `Line`-based selection primitive in `ui.py`, e.g.
 - Filled-bar/slider brightening is terminal-independent (explicit lighten) for
   every panel, consistently.
 - Selection looks identical across panels, modulo each system's accent colour.
+
+## Config wizard
+
+On first run, or with a command line arg. Use existing discovery code
+interactively, populating ~/.config/home-control/config.toml with user
+confirmation.
+
+## Install directions
+
+These would make sense:
+
+python3 -m venv ~/.local/share/home-control/venv
+source ~/.local/share/home-control/venv/bin/activate
+pip install git+https://github.com/jeremy-dolan/home-control.git
+ln -s ~/.local/share/home-control/venv/bin/home-control \
+      ~/.local/bin/home-control
+
+however, probably should direct users to make an 'editable' install so it
+can be extended to their devices

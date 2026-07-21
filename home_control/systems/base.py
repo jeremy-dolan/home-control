@@ -124,13 +124,13 @@ class System(ABC):
     def dismiss_popup(self) -> None:
         """Acknowledge the current `pending_popup()`; called when the user hits ENTER."""
 
-    def toolbar(self) -> str:
-        """Per-system key hints shown above the global toolbar while focused."""
-        return ""
-
     def toolbar_line(self) -> Line | None:
-        """Rich toolbar hints (accent-highlighted hotkeys), or None to fall back
-        to `toolbar()` rendered as plain, uniformly-colored text."""
+        """Per-system key hints shown above the global toolbar while focused,
+        built with `ui.hint`. None (the default) means the panel has no toolbar.
+
+        For unstyled hints return a single plain `Seg` — there's no separate
+        string-valued hook.
+        """
         return None
 
     def help_notes(self) -> list[str]:

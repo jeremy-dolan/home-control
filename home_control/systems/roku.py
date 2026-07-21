@@ -593,10 +593,10 @@ class RokuSystem(System):
         region.text(row + 1, rgt + 4, "all apps…")
 
     def _render_input_box(self, region: Region, title: str, caption: str,
-                          hints: str, note: str = "") -> None:
+                          hints: str = "", notes: tuple[str, ...] = ()) -> None:
         """Shared typing UI for the keyboard and search sub-modes: a titled,
         framed input line showing `self.typed` with a block cursor (tail-
-        truncated when long), plus a hint line and an optional dim note."""
+        truncated when long), then an optional hint line and dim note lines."""
         region.text(_GRID_TOP, 2, title, self.color, bold=True)
         region.text(_GRID_TOP, 3 + len(title), caption)
         box_w = min(60, region.width - 8)
@@ -617,22 +617,29 @@ class RokuSystem(System):
         region.text(top + 1, 5, interior, bold=True)
         region.text(top + 1, 4 + box_w - 1, "│", self.color)
         region.text(top + 2, 4, "└" + "─" * inner + "┘", self.color)
-        region.text(top + 4, 4, hints)
-        if note:
-            region.text(top + 5, 4, note, dim=True)
+        row = top + 4
+        if hints:
+            region.text(row, 4, hints)
+            row += 1
+        for i, line in enumerate(notes):
+            region.text(row + i, 4, line, dim=True)
 
     def _render_keyboard(self, region: Region) -> None:
+        # No hint line: the toolbar already covers the keys. What's left is the
+        # non-obvious part — arrows still work, and the echo you see is local.
         self._render_input_box(
-            region, "Keyboard", "— every keystroke is sent live to the Roku",
-            "⌫ delete    ⏎ submit    ↕←→ still navigate    \\ or ESC exit",
-            "Echo is local — the Roku's on-screen field is the truth.",
+            region, "Keyboard", "— keystrokes are sent live to the Roku",
+            notes=(
+                "Note: arrow keys still navigate",
+                "      typing echo is blocked on network send but local",
+                "      the Roku's on-screen field is the ground truth",
+            ),
         )
 
     def _render_search(self, region: Region) -> None:
         self._render_input_box(
             region, "Search", "— ⏎ sends the query to Roku's global search",
-            "⌫ delete    ⏎ search    \\ or ESC cancel",
-            "Nothing is sent while you type.",
+            notes=("Note: nothing is sent while you type",),
         )
 
     def _render_apps(self, region: Region) -> None:
@@ -652,15 +659,6 @@ class RokuSystem(System):
             select_row(region, top + r, name, sel=i == self.app_cursor, accent=self.color)
 
     # -- toolbar/help --------------------------------------------------------
-    def toolbar(self) -> str:
-        if self.mode == "apps":
-            return "↕ nav   ENTER launch   ESC back"
-        if self.mode == "keyboard":
-            return "type to send   ⏎ submit   ⌫ delete   \\ or ESC exit"
-        if self.mode == "search":
-            return "type query   ⏎ search   ⌫ delete   \\ or ESC cancel"
-        return "↕←→ navigate   ENTER ok   \\ keyboard mode   ⌫ back"
-
     def toolbar_line(self) -> Line | None:
         if self.mode == "apps":
             return hint_row(hint("↕", "nav", self.color), hint("ENTER", "launch", self.color),
