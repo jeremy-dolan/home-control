@@ -18,6 +18,7 @@ import math
 import os
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from .. import config
@@ -26,6 +27,7 @@ from .base import System, VoiceAction
 
 BRIDGE_IP = "192.168.1.99"
 CONNECT_TIMEOUT = 4  # seconds; phue's default 10 hangs the UI when unreachable
+CLOCK_DRIFT_WARN = 60  # seconds of bridge/system clock disagreement before flagging it
 
 # Brightness bar width in cells. The ladder below has one notch per cell so a
 # single ←/→ press moves the knob exactly one cell (= 5%).
@@ -804,6 +806,7 @@ class HueController:
             "mac": "ec:b5:fa:bf:6b:24", "swversion": "1969113040",
             "apiversion": "1.65.0", "zigbeechannel": 25,
             "timezone": "America/New_York",
+            "UTC": "2026-07-21T13:00:00", "localtime": "2026-07-21T09:00:00",
             "swupdate2": {"bridge": {"state": "noupdates"}},
             "internetservices": {"internet": "connected"},
             "whitelist": {"a": {"name": "home-control#dev",
@@ -1131,8 +1134,8 @@ class HueSystem(System):
         _, lights = self.ctl.snapshot()
         lines: list[tuple[str, str]] = [("BRIDGE", "header")]
 
-        def kv(k: str, v: object) -> None:
-            lines.append((f"  {k:<16}{v}", ""))
+        def kv(k: str, v: object, style: str = "") -> None:
+            lines.append((f"  {k:<16}{v}", style))
 
         kv("Name", cfg.get("name", "?"))
         kv("Model", cfg.get("modelid", "?"))
@@ -1143,6 +1146,19 @@ class HueSystem(System):
         kv("API version", cfg.get("apiversion", "?"))
         kv("ZigBee channel", cfg.get("zigbeechannel", "?"))
         kv("Timezone", cfg.get("timezone", "?"))
+
+        utc_str = cfg.get("UTC", "")
+        out_of_sync = False
+        if utc_str:
+            try:
+                bridge_utc = datetime.fromisoformat(utc_str).replace(tzinfo=UTC)
+                out_of_sync = abs((datetime.now(UTC) - bridge_utc).total_seconds()) > CLOCK_DRIFT_WARN
+            except ValueError:
+                pass
+        badge = " (out of sync?)" if out_of_sync else ""
+        time_style = "warn" if out_of_sync else ""
+        kv("UTC time", (utc_str or "?").replace("T", " ") + badge, time_style)
+        kv("Local time", cfg.get("localtime", "?").replace("T", " ") + badge, time_style)
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
         kv("Internet", cfg.get("internetservices", {}).get("internet", "?"))
 
@@ -1188,6 +1204,8 @@ class HueSystem(System):
                 region.text(top + i, 0, text, self.color, bold=True)
             elif style == "unreachable":
                 region.text(top + i, 0, text, "light_grey")
+            elif style == "warn":
+                region.text(top + i, 0, text, "red")
             else:
                 region.text(top + i, 0, text)
 
