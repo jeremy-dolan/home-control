@@ -854,7 +854,7 @@ class HueSystem(System):
         self.info_name = ""
         self._num_buf: str | None = None  # active typed-entry buffer, else None
         # system-info sub-mode (bridge config + lights + connected apps)
-        self.sysinfo_lines: list[tuple[str, str]] = []  # (text, style)
+        self.sysinfo_lines: list[tuple[str, str, str]] = []  # (text, style, badge)
         self.sysinfo_scroll = 0
         self._sysinfo_visible = 1  # visible row count, set each render for paging
 
@@ -1129,13 +1129,15 @@ class HueSystem(System):
         return str(fld.value)
 
     # -- system info -------------------------------------------------------
-    def _build_sysinfo_lines(self) -> list[tuple[str, str]]:
+    def _build_sysinfo_lines(self) -> list[tuple[str, str, str]]:
+        """Each line is (text, style, badge) — ``badge`` is drawn in red right
+        after ``text`` on the same row (e.g. a clock drift warning)."""
         cfg = self.ctl.full_config()
         _, lights = self.ctl.snapshot()
-        lines: list[tuple[str, str]] = [("BRIDGE", "header")]
+        lines: list[tuple[str, str, str]] = [("BRIDGE", "header", "")]
 
-        def kv(k: str, v: object, style: str = "") -> None:
-            lines.append((f"  {k:<16}{v}", style))
+        def kv(k: str, v: object, badge: str = "") -> None:
+            lines.append((f"  {k:<16}{v}", "", badge))
 
         kv("Name", cfg.get("name", "?"))
         kv("Model", cfg.get("modelid", "?"))
@@ -1156,21 +1158,20 @@ class HueSystem(System):
             except ValueError:
                 pass
         badge = " (out of sync?)" if out_of_sync else ""
-        time_style = "warn" if out_of_sync else ""
-        kv("UTC time", (utc_str or "?").replace("T", " ") + badge, time_style)
-        kv("Local time", cfg.get("localtime", "?").replace("T", " ") + badge, time_style)
+        kv("UTC time", (utc_str or "?").replace("T", " "), badge)
+        kv("Local time", cfg.get("localtime", "?").replace("T", " "), badge)
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
         kv("Internet", cfg.get("internetservices", {}).get("internet", "?"))
 
         ordered = sorted(lights.values(), key=lambda ls: ls.name.lower())
-        lines.append(("", ""))
-        lines.append((f"LIGHTS ({len(ordered)})", "header"))
+        lines.append(("", "", ""))
+        lines.append((f"LIGHTS ({len(ordered)})", "header", ""))
         for ls in ordered:
             reach = "reachable" if ls.reachable else "unreachable"
             name = ls.name[:20].ljust(20)
             model = (ls.modelid or "?")[:8].ljust(8)
             sw = (f"v{ls.swversion}" if ls.swversion else "?").ljust(10)
-            lines.append((f"  {name}  {model}  {sw}  {reach}", "" if ls.reachable else "unreachable"))
+            lines.append((f"  {name}  {model}  {sw}  {reach}", "" if ls.reachable else "unreachable", ""))
 
         apps = []
         for _wid, wd in cfg.get("whitelist", {}).items():
@@ -1180,10 +1181,10 @@ class HueSystem(System):
             apps.append((wd.get("name", "?"), last))
         apps.sort(key=lambda x: x[1], reverse=True)
         if apps:
-            lines.append(("", ""))
-            lines.append((f"CONNECTED APPS ({len(apps)})", "header"))
+            lines.append(("", "", ""))
+            lines.append((f"CONNECTED APPS ({len(apps)})", "header", ""))
             for name, last in apps:
-                lines.append((f"  {name[:30].ljust(30)}  {last}", ""))
+                lines.append((f"  {name[:30].ljust(30)}  {last}", "", ""))
         return lines
 
     def _render_sysinfo(self, region: Region) -> None:
@@ -1199,15 +1200,15 @@ class HueSystem(System):
             idx = self.sysinfo_scroll + i
             if idx >= total:
                 break
-            text, style = self.sysinfo_lines[idx]
+            text, style, badge = self.sysinfo_lines[idx]
             if style == "header":
-                region.text(top + i, 0, text, self.color, bold=True)
+                col = region.text(top + i, 0, text, self.color, bold=True)
             elif style == "unreachable":
-                region.text(top + i, 0, text, "light_grey")
-            elif style == "warn":
-                region.text(top + i, 0, text, "red", bold=True)
+                col = region.text(top + i, 0, text, "light_grey")
             else:
-                region.text(top + i, 0, text)
+                col = region.text(top + i, 0, text)
+            if badge:
+                region.text(top + i, col, badge, "red", bold=True)
 
     def _list_toolbar_hints(self) -> Line:
         return hint_row(
