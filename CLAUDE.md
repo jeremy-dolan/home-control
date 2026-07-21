@@ -92,24 +92,21 @@ device is discovered/configured, update both. Nothing tests this either.
 
 ## Design constraints
 
-- Built for a ~50-row terminal — design panels to use the space, don't
-  minimize for 40 rows.
+- Built for a 80-column and 45-60-row terminal — design panels to use the
+  space, don't minimize for 24 rows.
 - No cloud/account requirement — everything is local-LAN control.
 
 ## Agent workflow
 
-Default to an isolated git worktree per task, not direct edits in a shared
-checkout — this repo has already seen multiple agent sessions drop untracked
-files (draft CLAUDE.md variants, swap files) into the same working directory,
-which is exactly the collision worktrees prevent when sessions run
-concurrently. Default flow: worktree → branch → commit → push → open a draft
-PR for review before merging to `main`.
+When in doubt, default to an isolated git worktree per task.
 
-Escape hatch: small, single-session interactive edits (typo fixes, one-line
-tweaks) can be committed directly to the current branch without the full
-worktree+PR ceremony, if the user says so in the moment. When in doubt, use
-the isolated workflow. Never force-push, merge, or push to `main` without the
-user explicitly asking.
+Small changes (typo fixes, one-line tweaks) can be changed directly on the
+current branch without a full worktree ceremony.
+
+Freely commit changes to a worktree, but wait for confirmation before pushing
+or opening a draft PR; usually there's more work to be done.
+
+Never force-push, merge, or push to `main` without the user explicitly asking.
 
 ## Git conventions
 
