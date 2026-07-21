@@ -1144,7 +1144,8 @@ class HueSystem(System):
         kv("API version", cfg.get("apiversion", "?"))
         kv("ZigBee channel", cfg.get("zigbeechannel", "?"))
         kv("Timezone", cfg.get("timezone", "?"))
-        kv("Bridge time", cfg.get("localtime", "?"))
+        kv("UTC time", cfg.get("UTC", "?").replace("T", " "))
+        kv("Local time", cfg.get("localtime", "?").replace("T", " "))
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
         kv("Internet", cfg.get("internetservices", {}).get("internet", "?"))
 
