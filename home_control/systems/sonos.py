@@ -1344,7 +1344,7 @@ class SonosSystem(System):
             self._adjust_field(-1)
         elif key in (curses.KEY_RIGHT, ord("+"), ord("=")):
             self._adjust_field(1)
-        elif key in (ord("\n"), curses.KEY_ENTER, ord(" ")):
+        elif key in (ord("\n"), curses.KEY_ENTER):
             f = rows[self.info_cursor]
             if f.kind == "bool":
                 self._adjust_field(1)
