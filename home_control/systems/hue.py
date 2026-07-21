@@ -1246,17 +1246,6 @@ class HueSystem(System):
             hint("b/ESC", "back", self.color),
         )
 
-    def toolbar(self) -> str:
-        if self.mode == "scenes":
-            return "↕ nav   ENTER activate   s/ESC back"
-        if self.mode == "device":
-            if self._num_buf is not None:
-                return "type value   ENTER set   ESC cancel"
-            return "↕ nav   ←→ adjust   ENTER edit/toggle   d/ESC back"
-        if self.mode == "sysinfo":
-            return "↕/PgUp/PgDn scroll   b/ESC back"
-        return "".join(s.text for s in self._list_toolbar_hints())
-
     def toolbar_line(self) -> Line | None:
         if self.mode == "scenes":
             return self._scenes_toolbar_hints()

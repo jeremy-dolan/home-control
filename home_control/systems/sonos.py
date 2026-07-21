@@ -1153,17 +1153,6 @@ class SonosSystem(System):
             hint("ESC", "back", self.color),
         )
 
-    def toolbar(self) -> str:
-        if self.mode == "queue":
-            return "↕ nav   ENTER play   (r)emove   (C)lear   ESC back"
-        if self.mode == "favorites":
-            return "↕ nav   ENTER play   ESC back"
-        if self.mode == "group_confirm":
-            return "ENTER confirm   ESC cancel"
-        if self.mode == "device_info":
-            return "↕ nav   ←→ adjust   ENTER toggle   ESC back"
-        return "".join(s.text for s in self._main_toolbar_hints())
-
     def toolbar_line(self) -> Line | None:
         if self.mode == "queue":
             return self._queue_toolbar_hints()

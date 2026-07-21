@@ -652,15 +652,6 @@ class RokuSystem(System):
             select_row(region, top + r, name, sel=i == self.app_cursor, accent=self.color)
 
     # -- toolbar/help --------------------------------------------------------
-    def toolbar(self) -> str:
-        if self.mode == "apps":
-            return "↕ nav   ENTER launch   ESC back"
-        if self.mode == "keyboard":
-            return "type to send   ⏎ submit   ⌫ delete   \\ or ESC exit"
-        if self.mode == "search":
-            return "type query   ⏎ search   ⌫ delete   \\ or ESC cancel"
-        return "↕←→ navigate   ENTER ok   \\ keyboard mode   ⌫ back"
-
     def toolbar_line(self) -> Line | None:
         if self.mode == "apps":
             return hint_row(hint("↕", "nav", self.color), hint("ENTER", "launch", self.color),

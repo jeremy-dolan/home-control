@@ -794,11 +794,6 @@ class MideaSystem(System):
         return [Seg(label[0], self.color, bold=True), Seg(f"{label[1:]} {dot}", dim=True)]
 
     # -- toolbar/help --------------------------------------------------
-    def toolbar(self) -> str:
-        if self._num_buf is not None:
-            return "type temp   ENTER set   ESC cancel"
-        return "↕ select device   ←→ temp   ENTER power"
-
     def toolbar_line(self) -> Line | None:
         if self._num_buf is not None:
             return hint_row(hint("type", "temp", self.color), hint("ENTER", "set", self.color),

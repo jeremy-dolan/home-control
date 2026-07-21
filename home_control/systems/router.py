@@ -1347,9 +1347,6 @@ class RouterSystem(System):
             hint("r", "refresh devices", self.color, paren=True, key_color=self.color),
         )
 
-    def toolbar(self) -> str:
-        return "".join(s.text for s in self._toolbar_hints())
-
     def toolbar_line(self) -> Line:
         return self._toolbar_hints()
 
