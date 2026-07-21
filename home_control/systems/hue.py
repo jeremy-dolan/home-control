@@ -146,7 +146,7 @@ def brightness_bar(bri: int, on: bool, color: str = "", width: int = BAR_WIDTH) 
     if not on:
         return [Seg("─" * width, dim=True)]
     f = max(1, min(width, round(bri / 254 * width)))
-    return [Seg("━" * (f - 1) + "●", color), Seg("─" * (width - f), dim=True)]
+    return [Seg("━" * (f - 1) + "◉", color), Seg("─" * (width - f), dim=True)]
 
 
 # ---------------------------------------------------------------------------

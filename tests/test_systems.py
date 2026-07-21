@@ -24,13 +24,13 @@ def test_brightness_bar_shape():
     off = hue.brightness_bar(0, on=False)
     assert _bar_text(off) == "─" * hue.BAR_WIDTH
     assert all(s.dim for s in off)
-    # full → filled run + ● knob at the head, in the given accent colour
+    # full → filled run + ◉ knob at the head, in the given accent colour
     full = hue.brightness_bar(254, on=True, color="hue_blue")
-    assert _bar_text(full) == "━" * (hue.BAR_WIDTH - 1) + "●"
+    assert _bar_text(full) == "━" * (hue.BAR_WIDTH - 1) + "◉"
     assert full[0].color == "hue_blue"
     # mid → constant width, exactly one knob
     mid = hue.brightness_bar(127, on=True, color="hue_blue")
-    assert len(_bar_text(mid)) == hue.BAR_WIDTH and _bar_text(mid).count("●") == 1
+    assert len(_bar_text(mid)) == hue.BAR_WIDTH and _bar_text(mid).count("◉") == 1
 
 
 # --- Sonos -------------------------------------------------------------------
