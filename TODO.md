@@ -37,7 +37,26 @@ Finally, ■ IDLE should be in grey, not purple, and we should substitute "Roku
 Dynamic Menu" for something less branded and wordy. Maybe "Home"?
 
 ## add example config CI
-add a test to ensure example config doesn't drift, and setup CI on GH
+The drift test exists (`test_default_template_matches_example_file` in
+`tests/test_config_ui.py`) — still need to set up CI on GH so it actually runs
+on push/PR.
+
+## Keep help_notes() and README device docs in sync
+
+**Priority:** low · **Scope:** `README.md` (`## Device support`), each system's
+`help_notes()`
+
+The per-device implementation/config blurbs live in two places: the
+`## Device support` section of `README.md` and each system's `help_notes()`
+(the in-app `?` help). Change how a device is discovered or configured and both
+need editing — nothing enforces it, so they can drift silently.
+
+Unlike the config template, there's no byte-identical invariant to assert on
+(prose vs. prose), so a test can only catch structural omissions, e.g. every
+system exposing `help_notes()` has a matching `## Device support` subsection in
+the README. That catches a newly added device with no README entry, but not
+stale wording in an existing one — worth having anyway, since the whole-device
+omission is the failure that actually bites.
 
 ## have claude investigate linting issues
 I think we have a bunch of unrefered vars
