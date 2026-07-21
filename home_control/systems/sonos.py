@@ -1114,12 +1114,12 @@ class SonosSystem(System):
             hint("←→", "vol", self.color),
             hint("ENTER", "play/pause", self.color),
             hint("[ ]", "skip", self.color),
-            hint("S", "top", self.color, paren=True),
-            hint("m", "ute", self.color, paren=True),
-            hint("u", "queue", self.color),
-            hint("f", "av", self.color, paren=True),
-            hint("g", "roup", self.color, paren=True),
-            hint("d", "evice", self.color, paren=True),
+            hint("S", "stop", self.color, paren=True),
+            hint("m", "mute", self.color, paren=True),
+            hint("u", "queue", self.color, paren=True),
+            hint("f", "fav", self.color, paren=True),
+            hint("g", "group", self.color, paren=True),
+            hint("d", "device", self.color, paren=True),
             sep="  ",
         )
 
@@ -1127,8 +1127,8 @@ class SonosSystem(System):
         return hint_row(
             hint("↕", "nav", self.color),
             hint("ENTER", "play", self.color),
-            hint("r", "emove", self.color, paren=True),
-            hint("C", "lear", self.color, paren=True),
+            hint("r", "remove", self.color, paren=True),
+            hint("C", "clear", self.color, paren=True),
             hint("ESC", "back", self.color),
         )
 

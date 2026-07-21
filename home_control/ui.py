@@ -257,22 +257,32 @@ def justify(left: Line, right: Line, width: int, *, reverse: bool = False) -> Li
     return out
 
 
-def hint(key: str, rest: str, color: str, *, paren: bool = False, key_color: str | None = None) -> Line:
+def hint(key: str, label: str, color: str, *, paren: bool = False, key_color: str | None = None) -> Line:
     """One toolbar key hint: the hot key brightened, the label in the plain
     accent color (not dimmed/greyed — just not as bright as the key).
 
-    ``paren=True`` wraps the key in parens inline with the label, e.g.
-    ``hint("s", "cenes", color, paren=True)`` -> "(s)cenes". Otherwise the key
-    stands alone before a space-separated label, e.g. ``hint("↕", "nav", color)``
-    -> "↕ nav".
+    ``paren=True`` parenthesizes the key inside the whole label, at the first
+    case-insensitive match — the letter need not lead:
+    ``hint("s", "scenes", color, paren=True)`` -> "(s)cenes",
+    ``hint("u", "queue", color, paren=True)`` -> "q(u)eue". The key's own case
+    wins over the label's, so ``hint("U", "queue", ...)`` -> "q(U)eue". A key
+    that doesn't occur in the label is parenthesized in front: "(F5) refresh".
+
+    Without `paren` the key stands alone before a space-separated label, e.g.
+    ``hint("↕", "nav", color)`` -> "↕ nav".
 
     ``key_color`` overrides the auto-lightened key color — e.g. to match the
     key to a section header's exact accent instead of a paler tint of it.
     """
     bright = key_color if key_color is not None else lighten(color)
     if paren:
-        return [Seg("(", color), Seg(key, bright, bold=True), Seg(f"){rest}", color)]
-    return [Seg(key, bright, bold=True), Seg(f" {rest}", color)]
+        i = label.lower().find(key.lower())
+        if i < 0:
+            return [Seg("(", color), Seg(key, bright, bold=True), Seg(f") {label}", color)]
+        head, tail = label[:i], label[i + len(key):]
+        out: Line = [Seg(head, color)] if head else []
+        return [*out, Seg("(", color), Seg(key, bright, bold=True), Seg(f"){tail}", color)]
+    return [Seg(key, bright, bold=True), Seg(f" {label}", color)]
 
 
 def hint_row(*hints: Line, sep: str = "   ") -> Line:

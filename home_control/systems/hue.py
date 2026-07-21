@@ -1214,9 +1214,9 @@ class HueSystem(System):
             hint("↕", "nav", self.color),
             hint("←→", "bri", self.color),
             hint("ENTER", "on/off", self.color),
-            hint("s", "cenes", self.color, paren=True),
-            hint("d", "etails", self.color, paren=True),
-            hint("b", "ridge info", self.color, paren=True),
+            hint("s", "scenes", self.color, paren=True),
+            hint("d", "details", self.color, paren=True),
+            hint("b", "bridge info", self.color, paren=True),
         )
 
     def _scenes_toolbar_hints(self) -> Line:
