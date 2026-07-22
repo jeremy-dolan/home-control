@@ -1169,7 +1169,7 @@ class HueSystem(System):
             except ValueError:
                 pass
         badge = " (out of sync?)" if out_of_sync else ""
-        time_style = "warn" if out_of_sync else ""
+        time_style = "alert" if out_of_sync else ""
         kv("UTC time", (utc_str or "?").replace("T", " ") + badge, time_style)
         kv("Local time", cfg.get("localtime", "?").replace("T", " ") + badge, time_style)
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
@@ -1217,7 +1217,9 @@ class HueSystem(System):
                 region.text(top + i, 0, text, self.color, bold=True)
             elif style == "unreachable":
                 region.text(top + i, 0, text, "muted")
-            elif style == "warn":
+            elif style == "alert":
+                # A drifted bridge clock silently misfires every schedule the
+                # bridge runs, so it earns "fault" red rather than "warn" amber.
                 region.text(top + i, 0, text, "fault")
             else:
                 region.text(top + i, 0, text)
