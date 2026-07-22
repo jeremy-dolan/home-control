@@ -159,8 +159,11 @@ def _axis_label(bps: float) -> str:
     return f"{bps:.0f}"
 
 
-# A "cell" is (glyph, color); color "" means dim (axis/fill/readout text).
-_Cell = tuple[str, str]
+# A "cell" is (glyph, colour, dim). Dimness is carried explicitly rather than
+# inferred from a blank colour: the axis and fill are dim and uncoloured, but so
+# would be the readout text, which has to stay at full brightness (it is a live
+# value, like the Latency row's "11 ms").
+_Cell = tuple[str, str, bool]
 
 # Throughput is two stacked line-charts (download on top, upload below) that both grow
 # UP from their own 0 baseline. Each uses a *fixed* log y-axis so a small transfer
@@ -222,14 +225,15 @@ def _plot(vals: list[float], plot_w: int, rows: int, lo: float, hi: float) -> li
 
 
 def _overlay_readout(cells: list[_Cell], text: str, color: str, col: int = 1) -> list[_Cell]:
-    """Splice a `● …` readout over the cells at `col`: bullet in `color`, the rate text
-    plain white (the current speed is a live value, so it shouldn't be dimmed)."""
+    """Splice a `● …` readout over the cells at `col`: bullet in `color`, the rate
+    text in the default foreground. Neither is dimmed — the current speed is a live
+    value, shown the way the Latency row shows its numbers."""
     out = list(cells)
     for i, ch in enumerate(text):
         j = col + i
         if j >= len(out):
             break
-        out[j] = (ch, color if i == 0 else "")
+        out[j] = (ch, color if i == 0 else "", False)
     return out
 
 
@@ -238,11 +242,12 @@ def _grid_row_to_line(label: str, axis: str, cells: list[_Cell], lw: int) -> Lin
     line: Line = [Seg(label.rjust(lw) + " ", dim=True), Seg(axis, dim=True)]
     i = 0
     while i < len(cells):
-        col = cells[i][1]
+        style = cells[i][1:]
         j = i
-        while j < len(cells) and cells[j][1] == col:
+        while j < len(cells) and cells[j][1:] == style:
             j += 1
-        line.append(Seg("".join(c for c, _ in cells[i:j]), col, dim=(col == "")))
+        colour, is_dim = style
+        line.append(Seg("".join(c for c, _, _ in cells[i:j]), colour, dim=is_dim))
         i = j
     return line
 
@@ -351,20 +356,20 @@ def _stack_chart(down: list[float], up: list[float], width: int, height: int, *,
     if dph < 1 or uph < 1:
         return []
 
-    grid: list[list[_Cell]] = [[(" ", "")] * plot_w for _ in range(height)]
-    title: list[_Cell] = [(" ", "")] * plot_w          # download overflow rides the title row
+    grid: list[list[_Cell]] = [[(" ", "", True)] * plot_w for _ in range(height)]
+    title: list[_Cell] = [(" ", "", True)] * plot_w          # download overflow rides the title row
     for r in (d_base, u_base):                         # full-width 0 baselines
-        grid[r] = [("─", "")] * plot_w
+        grid[r] = [("─", "", True)] * plot_w
     for y, x, ch in _series_cells(down, plot_w, dph, overflow=True):
         row = d_base - y                                # y == dph+1 → row -1 (title)
         if row == -1:
-            title[x] = (ch, down_color)
+            title[x] = (ch, down_color, False)
         elif 0 <= row < height:
-            grid[row][x] = (ch, down_color)
+            grid[row][x] = (ch, down_color, False)
     for y, x, ch in _series_cells(up, plot_w, uph, overflow=True):
         row = u_base - y                                # y == uph+1 lands on d_base
         if 0 <= row < height:
-            grid[row][x] = (ch, up_color)
+            grid[row][x] = (ch, up_color, False)
 
     d_read = 0                                          # readout on each chart's top
     u_read = d_base + 1                                 # (ceiling) row — clear of data
@@ -383,9 +388,9 @@ def _empty_chart(width: int, height: int, *, down_color: str, up_color: str,
     top. (The "collecting throughput..." hint is drawn on the title line by the caller.)"""
     height = max(4, height)
     dph, uph, d_base, u_base, labels, lw, plot_w = _stack_geometry(width, height)
-    grid: list[list[_Cell]] = [[(" ", "")] * plot_w for _ in range(height)]
+    grid: list[list[_Cell]] = [[(" ", "", True)] * plot_w for _ in range(height)]
     for r in (d_base, u_base):
-        grid[r] = [("─", "")] * plot_w
+        grid[r] = [("─", "", True)] * plot_w
 
     d_read = 0
     u_read = d_base + 1
@@ -394,7 +399,7 @@ def _empty_chart(width: int, height: int, *, down_color: str, up_color: str,
 
     body = [_grid_row_to_line(labels[r], "┼" if r in (d_base, u_base) else "┤",
                               grid[r], lw) for r in range(height)]
-    return [_grid_row_to_line("", " ", [(" ", "")] * plot_w, lw)] + body
+    return [_grid_row_to_line("", " ", [(" ", "", True)] * plot_w, lw)] + body
 
 
 # ---------------------------------------------------------------------------
@@ -1182,7 +1187,8 @@ class RouterSystem(System):
     poll_interval_focused = 2.0
     poll_interval_idle = 5.0
 
-    DOWN_COLOR = "router_green"  # download throughput chart (top, grows up)
+    # Download is the panel's own accent; only the upload series needs a colour of
+    # its own, to stay distinguishable where the two charts stack.
     UP_COLOR = "info"    # upload throughput chart (bottom, grows up)
     MAX_CHART_H = 10      # stacked-chart height (download 4 + base + upload 4 + base)
 
@@ -1279,13 +1285,13 @@ class RouterSystem(System):
             cw = max(1, w - 2 * pad)
             chart = _stack_chart(
                 s.down_hist, s.up_hist, cw, height,
-                down_color=self.DOWN_COLOR, up_color=self.UP_COLOR,
+                down_color=self.color, up_color=self.UP_COLOR,
                 down_text=down_text, up_text=up_text,
             )
             collecting = not chart
             if collecting:
                 chart = _empty_chart(
-                    cw, height, down_color=self.DOWN_COLOR, up_color=self.UP_COLOR,
+                    cw, height, down_color=self.color, up_color=self.UP_COLOR,
                     down_text=down_text, up_text=up_text,
                 )
             # Title row shares the line with the chart's overflow row: draw that first,
@@ -1300,9 +1306,9 @@ class RouterSystem(System):
         # No vertical room for a graph — title + one-line readout.
         region.text(y, 0, "Throughput", self.color, bold=True)
         region.segs(y, [
-            Seg("● ", self.DOWN_COLOR), Seg(f"↓ {_fmt_rate(s.down_bps)}", dim=True),
+            Seg("● ", self.color), Seg(f"↓ {_fmt_rate(s.down_bps)}"),
             Seg("      "),
-            Seg("● ", self.UP_COLOR), Seg(f"↑ {_fmt_rate(s.up_bps)}", dim=True),
+            Seg("● ", self.UP_COLOR), Seg(f"↑ {_fmt_rate(s.up_bps)}"),
         ], 12)
         return y + 2
 
