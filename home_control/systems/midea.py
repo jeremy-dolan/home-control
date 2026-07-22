@@ -181,11 +181,19 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
 # ---------------------------------------------------------------------------
 # Token/key cache — best-effort, never fatal (a cache miss just re-pairs).
 # Entries also carry the device's discovery metadata (ip/port/protocol/type/
-# model) plus its learned unsupported-query list once it has connected
-# successfully, so pinned units skip both the UDP discovery round (discover()
-# always blocks its full 5s socket timeout, even for a single IP that answers
-# instantly) and connect()'s 2s-per-ignored-query protocol probing on later
-# runs.
+# model) once it has connected successfully, so pinned units skip the UDP
+# discovery round on later runs (discover() always blocks its full 5s socket
+# timeout, even for a single IP that answers instantly).
+#
+# Only positive facts belong here. midealocal's per-connection
+# _unsupported_protocol list is tempting to cache too — connect() sends 8
+# queries and eats midealocal's 2s QUERY_TIMEOUT for each one this unit
+# ignores (2 of the 8, so 2-4s) — but that list is *derived from* those
+# timeouts, so a unit that was merely slow or busy once gets a working query
+# marked dead forever. It isn't even stable across clean runs: three probes
+# of the same unit learned two different lists. Caching it once left the
+# capabilities query permanently skipped, and every card rendered as a bare
+# Fan/Auto row.
 # ---------------------------------------------------------------------------
 
 
@@ -325,7 +333,6 @@ class MideaController:
                     "device_id": int(did_s), "type": entry["type"], "ip_address": ip,
                     "port": entry["port"], "protocol": entry["protocol"],
                     "model": entry.get("model", ""), "_name": name, "_cached": True,
-                    "_unsupported": entry.get("unsupported") or [],
                 }
         return None
 
@@ -364,14 +371,6 @@ class MideaController:
         )
         if dev is None:
             return None
-        # connect(check_protocol=True) probes every query type the protocol
-        # defines and eats a 2s timeout per query this unit ignores (~6s
-        # total observed) — and midealocal re-learns that list per instance.
-        # Pre-seed it from the cache so a known unit reconnects in <1s. If
-        # the lib ever renames the attr this just sets a dead one: connects
-        # still work, only slower.
-        if raw.get("_unsupported"):
-            dev._unsupported_protocol = list(raw["_unsupported"])
         if dev.connect(check_protocol=True):
             return dev
         return None
@@ -434,8 +433,7 @@ class MideaController:
                 self._ips[did] = d["ip_address"]
                 connected_any = True
                 meta = {"ip": d["ip_address"], "port": d["port"], "type": d["type"],
-                        "protocol": d["protocol"], "model": d.get("model", ""),
-                        "unsupported": sorted(getattr(dev, "_unsupported_protocol", []))}
+                        "protocol": d["protocol"], "model": d.get("model", "")}
                 entry = self._token_cache.setdefault(str(did), {})
                 if any(entry.get(k) != v for k, v in meta.items()):
                     entry.update(meta)

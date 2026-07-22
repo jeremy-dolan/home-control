@@ -224,7 +224,7 @@ def test_pinned_discover_skips_probe_with_cached_metadata(monkeypatch):
     raw = ctl._discover_raw()
     assert raw == {123: {
         "device_id": 123, "type": 172, "ip_address": "10.0.0.9", "port": 6444,
-        "protocol": 2, "model": "m1", "_name": "Den", "_cached": True, "_unsupported": [],
+        "protocol": 2, "model": "m1", "_name": "Den", "_cached": True,
     }}
 
 
@@ -362,3 +362,41 @@ def test_unit_from_device_offline_and_off():
     assert u.online is False
     assert u.power is False
     assert u.swing_mode == "OFF"
+
+
+class _FakeConnected:
+    """Stands in for a freshly connected midealocal device."""
+
+    device_id = 123
+    name = "Den"
+    available = True
+    daemon = False
+    attributes: dict = {}
+    capabilities = {"cool_mode": True, "auto_mode": True, "eco": True}
+    _unsupported_protocol = ["MessageQueryAppliance"]
+
+    def open(self):
+        pass
+
+
+def test_protocol_probe_result_is_never_cached(monkeypatch):
+    # midealocal learns _unsupported_protocol by timing out a query, so it
+    # holds false negatives whenever a unit was merely slow or busy. Caching
+    # it made one bad pass permanent — every card collapsed to Fan/Auto once
+    # the capabilities query landed in that list. Only positive discovery
+    # metadata may be persisted.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: _FakeConnected())
+    ctl._discover_all()
+    assert "unsupported" not in ctl._token_cache["123"]
+    assert ctl._token_cache["123"]["port"] == 6444  # metadata still cached
+
+
+def test_cached_metadata_carries_no_probe_seed(monkeypatch):
+    ctl = _pinned_controller(
+        monkeypatch,
+        [{"ip": "10.0.0.9", "name": "Den"}],
+        {"123": {**_CACHED_ENTRY, "unsupported": ["MessageCapabilitiesQuery"]}},
+    )
+    assert "_unsupported" not in ctl._discover_raw()[123]
