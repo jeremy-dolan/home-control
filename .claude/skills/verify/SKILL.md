@@ -55,6 +55,12 @@ Gotchas:
   focused panel's key hints render in its own toolbar, so they're already in
   your pane capture; `handle_key()` in the system's module is authoritative
   for anything the toolbar elides.
+- Panels repaint from a cached snapshot that only refreshes on poll ticks —
+  `poll_interval_focused` (1s) when focused, `poll_interval_idle` (5s) when
+  not, and the last-registered panel starts unfocused. When verifying *how
+  fast* something appears, drive the panel at its real interval and render
+  through `render_expanded`; a fast hand-rolled poll loop makes a 5s stall
+  look instant (that mistake shipped twice in `2143095`'s branch).
 
 ## Cleanup
 

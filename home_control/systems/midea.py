@@ -9,6 +9,18 @@ Split into:
     dict you can read with zero network I/O. Only the one-time cloud login
     (V3 token/key pairing) is ``async def`` — done via a single blocking
     ``asyncio.run(...)`` call, no dedicated event-loop thread needed.
+
+    Nothing here ever waits on a query. midea-local's ``connect(
+    check_protocol=True)`` sends 8 queries and blocks for each reply in turn,
+    so the two this unit ignores cost QUERY_TIMEOUT (2s) each and a card takes
+    ~7s to appear. Instead we connect without the protocol probe (TCP + V3
+    auth only), start the device's own thread, and hand it the two queries
+    that actually paint a card — status and B5 capabilities — as
+    fire-and-forget sends. The thread parses the replies into
+    ``dev.attributes``/``dev.capabilities`` and the next poll tick picks them
+    up: measured 0.2-0.4s to a full card against a quiet unit. The remaining
+    queries follow once the card is up, so a silent query costs nothing but
+    an unanswered packet.
   * MideaSystem — the panel: every unit (online or not) is always fully
     expanded as a 3-line card. ↕ picks which *online* unit hotkeys act on;
     p/m/f/s/e/t/d directly toggle/cycle that unit's fields; ←→ nudges its
@@ -49,6 +61,7 @@ from midealocal.cloud import get_midea_cloud
 from midealocal.const import DeviceType
 from midealocal.devices import device_selector
 from midealocal.devices.ac import MideaACDevice
+from midealocal.devices.ac.message import MessageCapabilitiesQuery, MessageQuery
 from midealocal.discover import discover as midea_discover
 
 from .. import config
@@ -59,12 +72,30 @@ from .base import System, VoiceAction
 # auth rate limit — retrying every poll tick (as fast as 1s when focused)
 # would hammer that endpoint, unlike Roku's cheap local-only SSDP retry.
 DISCOVERY_RETRY_INTERVAL = 60
-# Fixed settle delay after sending a command before re-reading device state
-# for the mirrored cache. midea-local's set_attribute()/set_target_temperature()
-# are fire-and-forget at the protocol layer — the actual attribute update
-# lands asynchronously once the unit's persistent background thread parses
-# its ack, which is sub-second on a LAN.
-EDIT_SETTLE_DELAY = 0.3
+# The AC's setpoint resolution: it stores half-degrees Celsius, and
+# MessageGeneralSet encodes the integer part with int() but the half-degree
+# bit with round(t * 2) — so a value that isn't already a multiple of 0.5
+# can set those two halves from different sides and land somewhere else
+# entirely. 22.78°C (73°F stepped up from 72°F) encodes as a flat 22.0°C:
+# the setpoint never moves and the arrow key looks dead. Quantize first and
+# every whole °F maps to its own half-degree, round-tripping exactly.
+TEMP_STEP_C = 0.5
+
+# A freshly connected unit's first status reply lands on the device's own
+# thread a fraction of a second after we ask for it — but it only reaches the
+# panel when a poll tick re-reads it, and Midea sits last in the panel order,
+# so at startup that tick is poll_interval_idle (5s) away. Poll fast while any
+# connected unit is still waiting for that first reply, then drop back to the
+# normal cadence. SETTLE_WINDOW caps it so a unit that never answers can't
+# hold the fast cadence forever.
+SETTLE_POLL_INTERVAL = 0.2
+SETTLE_WINDOW = 15.0
+# A unit's picture arrives in three waves — status, then B5 capabilities, then
+# the follow-up queries (_fill_in) carrying screen_display/error_code. Each
+# wave is useless until a poll tick reads it, so the fast cadence has to
+# outlast the last one, not just the first. There's no ack to wait on for the
+# follow-up burst, so hold the fast cadence briefly after sending it.
+FILL_GRACE = 1.5
 
 TOKEN_CACHE_PATH = Path(
     os.environ.get("HOME_CONTROL_MIDEA_CACHE")
@@ -108,6 +139,12 @@ class MideaUnit:
     # default field values. Once contacted it stays True even if the unit
     # later goes offline — then its dimmed card is genuine last-known state.
     contacted: bool = False
+    # Capabilities are a second, separate reply from the status one, and it
+    # can land a beat later. Until it does, the supported_* lists below are
+    # placeholder defaults, not this unit's real options — the panel shows
+    # the header alone rather than a card claiming the unit has one mode and
+    # one fan speed.
+    caps_known: bool = False
     power: bool = False
     mode: str = "COOL"            # AUTO | COOL | DRY | FAN_ONLY (no HEAT on this model)
     fan_speed: str = "AUTO"       # SILENT | LOW | MEDIUM | HIGH | AUTO | MAX
@@ -172,6 +209,11 @@ def _f_to_c(f: float) -> float:
     return (f - 32) * 5 / 9
 
 
+def _quantize_c(c: float) -> float:
+    """Snap a Celsius setpoint to the half-degree grid the unit stores."""
+    return round(c / TEMP_STEP_C) * TEMP_STEP_C
+
+
 def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
     if c is None:
         return "—"
@@ -181,11 +223,19 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
 # ---------------------------------------------------------------------------
 # Token/key cache — best-effort, never fatal (a cache miss just re-pairs).
 # Entries also carry the device's discovery metadata (ip/port/protocol/type/
-# model) plus its learned unsupported-query list once it has connected
-# successfully, so pinned units skip both the UDP discovery round (discover()
-# always blocks its full 5s socket timeout, even for a single IP that answers
-# instantly) and connect()'s 2s-per-ignored-query protocol probing on later
-# runs.
+# model) once it has connected successfully, so pinned units skip the UDP
+# discovery round on later runs (discover() always blocks its full 5s socket
+# timeout, even for a single IP that answers instantly).
+#
+# Only positive facts belong here. midealocal's per-connection
+# _unsupported_protocol list was cached here once and must not be again: it
+# is *derived from* query timeouts, so a unit that was merely slow or busy
+# gets a working query marked dead forever, and it isn't stable across clean
+# runs — three probes of the same unit learned two different lists. Caching
+# it left the capabilities query permanently skipped, and every card rendered
+# as a bare Fan/Auto row. Nothing reads that list now (we never ask
+# midea-local to probe — see _try_connect), but the temptation returns every
+# time someone measures a connect.
 # ---------------------------------------------------------------------------
 
 
@@ -204,9 +254,43 @@ def _save_token_cache(cache: dict[str, dict[str, Any]], path: Path = TOKEN_CACHE
         pass
 
 
+def _status_ready(dev: MideaACDevice) -> bool:
+    """Has a status reply landed yet? ``mode`` is 0 until one does, and no
+    real mode maps to 0 — before that every attribute is a library default,
+    which would render as a confident card full of numbers we never read."""
+    return bool(dev.attributes.get("mode"))
+
+
+def _caps_ready(dev: MideaACDevice) -> bool:
+    """Has the B5 capabilities reply landed? Every AC reports at least one
+    mode flag, so their absence means it hasn't."""
+    caps = dev.capabilities or {}
+    return any(k in caps for k in ("cool_mode", "heat_mode", "auto_mode", "dry_mode"))
+
+
 def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     a = dev.attributes
     caps = dev.capabilities or {}
+    if not _caps_ready(dev):
+        # Status without capabilities: report the live fields and leave every
+        # supported_*/supports_* at its dataclass default, so nothing
+        # downstream mistakes "not told yet" for "not supported".
+        vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
+        return MideaUnit(
+            id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
+            online=dev.available, contacted=True, caps_known=False,
+            power=bool(a.get("power")),
+            mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
+            fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
+            swing_mode=_BOOLS_TO_SWING.get((vertical, horizontal), "OFF"),
+            target_temp_c=float(a.get("target_temperature") or 24.0),
+            indoor_temp_c=a.get("indoor_temperature"),
+            outdoor_temp_c=a.get("outdoor_temperature"),
+            fahrenheit=bool(a.get("temp_fahrenheit")),
+            eco=bool(a.get("eco_mode")), turbo=bool(a.get("boost_mode")),
+            display_on=bool(a.get("screen_display")),
+            filter_alert=bool(a.get("full_dust")), error_code=int(a.get("error_code") or 0),
+        )
     modes = [
         name
         for name, present in (
@@ -241,7 +325,7 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
     return MideaUnit(
         id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
-        online=dev.available, contacted=True,
+        online=dev.available, contacted=True, caps_known=True,
         power=bool(a.get("power")),
         mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
         fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
@@ -277,6 +361,8 @@ class MideaController:
         self._units: dict[int, MideaUnit] = {}
         self._devices: dict[int, MideaACDevice] = {}
         self._ips: dict[int, str] = {}
+        self._filled: dict[int, float] = {}   # device id -> when its follow-up burst was sent
+        self._settle_deadline = 0.0      # poll fast until this time (see SETTLE_WINDOW)
         self._token_cache = _load_token_cache()
         self.error = ""
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
@@ -325,7 +411,6 @@ class MideaController:
                     "device_id": int(did_s), "type": entry["type"], "ip_address": ip,
                     "port": entry["port"], "protocol": entry["protocol"],
                     "model": entry.get("model", ""), "_name": name, "_cached": True,
-                    "_unsupported": entry.get("unsupported") or [],
                 }
         return None
 
@@ -364,17 +449,29 @@ class MideaController:
         )
         if dev is None:
             return None
-        # connect(check_protocol=True) probes every query type the protocol
-        # defines and eats a 2s timeout per query this unit ignores (~6s
-        # total observed) — and midealocal re-learns that list per instance.
-        # Pre-seed it from the cache so a known unit reconnects in <1s. If
-        # the lib ever renames the attr this just sets a dead one: connects
-        # still work, only slower.
-        if raw.get("_unsupported"):
-            dev._unsupported_protocol = list(raw["_unsupported"])
-        if dev.connect(check_protocol=True):
-            return dev
-        return None
+        # check_protocol=False keeps this to the TCP connect and the V3 auth
+        # handshake — still a real pairing verdict (a bad token/key raises and
+        # returns False), without the 8-query probe that blocks on every
+        # silent one. set_available() is connect()'s job only in the
+        # check_protocol branch, so do it here.
+        if not dev.connect(check_protocol=False):
+            return None
+        dev.set_available(True)
+        return dev
+
+    @staticmethod
+    def _prime(dev: MideaACDevice) -> None:
+        """Ask for the two replies a card is made of — live status and B5
+        capabilities — and don't wait for either. The device's own thread is
+        already running and parses whatever comes back."""
+        try:
+            version = dev._message_protocol_version
+            dev.build_send(MessageQuery(version), query=True)
+            dev.build_send(MessageCapabilitiesQuery(version), query=True)
+        except Exception:
+            # A dead socket here just means no card yet; the device thread's
+            # own connect loop takes over from this point.
+            pass
 
     def _discover_all(self) -> None:
         """Run a discovery pass, gated by DISCOVERY_RETRY_INTERVAL — a failure
@@ -430,12 +527,23 @@ class MideaController:
             if dev is not None:
                 dev.daemon = True
                 dev.open()
+                self._prime(dev)
+                self._settle_deadline = time.time() + SETTLE_WINDOW
                 self._devices[did] = dev
                 self._ips[did] = d["ip_address"]
                 connected_any = True
+                # Connected, but the primed status reply is still in flight and
+                # _refresh_snapshot won't publish a card until it lands. The
+                # synthetic placeholder keyed by IP was just dropped, so without
+                # this the panel has no units at all for that window and falls
+                # back to "Discovering...". Re-key it by the real device id.
+                self._units.setdefault(
+                    did,
+                    MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or d["ip_address"],
+                              online=False),
+                )
                 meta = {"ip": d["ip_address"], "port": d["port"], "type": d["type"],
-                        "protocol": d["protocol"], "model": d.get("model", ""),
-                        "unsupported": sorted(getattr(dev, "_unsupported_protocol", []))}
+                        "protocol": d["protocol"], "model": d.get("model", "")}
                 entry = self._token_cache.setdefault(str(did), {})
                 if any(entry.get(k) != v for k, v in meta.items()):
                     entry.update(meta)
@@ -472,9 +580,7 @@ class MideaController:
             self._units[placeholder_id] = MideaUnit(id=placeholder_id, ip=ip, name=p.get("name") or ip, online=False)
 
         if connected_any:
-            with self._lock:
-                for did, dev in self._devices.items():
-                    self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+            self._refresh_snapshot()
             self.error = ""
         elif not self._units:
             if self._last_seen_count == 0:
@@ -486,12 +592,29 @@ class MideaController:
         """No network I/O — each connected device's own persistent background
         thread keeps ``dev.attributes``/``dev.available`` live-updated, so
         this just re-derives MideaUnit snapshots from current in-memory
-        state."""
+        state. A device whose first status reply hasn't arrived keeps its
+        placeholder card: there is nothing real to show yet."""
         if not self._devices:
             return
         with self._lock:
             for did, dev in self._devices.items():
-                self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+                if _status_ready(dev):
+                    self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+
+    def _fill_in(self) -> None:
+        """Once a unit's card is up, ask for everything else exactly once —
+        the fields the two priming queries don't carry (screen_display and
+        error_code ride on MessageNewProtocolQuery, plus power/humidity
+        counters). Fire-and-forget again, so the queries this unit ignores
+        cost nothing but an unanswered packet."""
+        for did, dev in self._devices.items():
+            if did in self._filled or not _status_ready(dev):
+                continue
+            self._filled[did] = time.time()
+            try:
+                dev.refresh_status()
+            except Exception:
+                self._filled.pop(did, None)
 
     def poll(self, focused: bool) -> None:
         if self.mock:
@@ -499,62 +622,92 @@ class MideaController:
             return
         self._discover_all()
         self._refresh_snapshot()
+        self._fill_in()
+
+    def _fully_read(self, did: int, dev: MideaACDevice, now: float) -> bool:
+        """Has every wave of this unit's first picture arrived — status,
+        capabilities, and the follow-up burst (which has no ack, so it just
+        gets FILL_GRACE to land)?"""
+        if not (_status_ready(dev) and _caps_ready(dev)):
+            return False
+        sent_at = self._filled.get(did)
+        return sent_at is not None and now - sent_at >= FILL_GRACE
+
+    @property
+    def settling(self) -> bool:
+        """Is any connected unit still filling in its first picture? While one
+        is, the panel polls at SETTLE_POLL_INTERVAL so each wave reaches the
+        card as it lands instead of waiting out a 5s idle tick."""
+        now = time.time()
+        if now > self._settle_deadline:
+            return False
+        return not all(self._fully_read(did, dev, now) for did, dev in self._devices.items())
 
     # -- reads/commands (main thread) -------------------------------------
     def snapshot(self) -> dict[int, MideaUnit]:
         with self._lock:
             return dict(self._units)
 
-    def apply_edit(self, unit_id: int, fld: EditableField) -> None:
-        """Push one edited field to the live device and mirror the result into
-        the cache. midea-local's setters are fire-and-forget at the protocol
-        layer (the actual state update lands via the device's own background
-        thread once it parses the ack) — sleep a short settle delay, then
-        rebuild the cached MideaUnit from the device's *actual* current
-        state, never optimistically."""
-        if self.mock:
-            self._apply_edit_mock(unit_id, fld)
-            return
-        dev = self._devices.get(unit_id)
-        if dev is None:
-            return
-        try:
-            if fld.api_key == "operational_mode":
-                dev.set_attribute("mode", _MODE_TO_INT[fld.value])
-            elif fld.api_key == "fan_speed":
-                dev.set_attribute("fan_speed", _FAN_TO_INT[fld.value])
-            elif fld.api_key == "swing_mode":
-                vertical, horizontal = _SWING_TO_BOOLS[fld.value]
-                dev.set_swing(vertical, horizontal)
-            elif fld.api_key == "target_temperature":
-                value = _f_to_c(fld.value) if dev.attributes.get("temp_fahrenheit") else float(fld.value)
-                dev.set_target_temperature(value, None)
-            elif fld.api_key == "eco":
-                dev.set_attribute("eco_mode", fld.value)
-            elif fld.api_key == "turbo":
-                dev.set_attribute("boost_mode", fld.value)
-            elif fld.api_key == "display_on":
-                dev.set_attribute("screen_display", fld.value)
-            else:  # "power_state"
-                dev.set_attribute("power", fld.value)
-        except Exception as e:
-            self.error = f"Command to unit {unit_id} failed: {type(e).__name__}"
-            return
-        time.sleep(EDIT_SETTLE_DELAY)
-        with self._lock:
-            self._units[unit_id] = _unit_from_device(dev, self._ips.get(unit_id, ""))
+    def target_c_for(self, unit_id: int, display_value: float) -> float:
+        """Convert a setpoint typed/stepped in the unit's own display scale to
+        the half-degree Celsius the protocol can actually carry."""
+        unit = self._units.get(unit_id)
+        fahrenheit = unit.fahrenheit if unit else False
+        return _quantize_c(_f_to_c(display_value) if fahrenheit else float(display_value))
 
-    def _apply_edit_mock(self, unit_id: int, fld: EditableField) -> None:
-        """Mock mode has no real device to push a command to — mutate the
-        fixture directly instead, so hotkeys are actually interactive when
-        developing/demoing against HOME_CONTROL_MOCK=1."""
+    def apply_edit(self, unit_id: int, fld: EditableField) -> None:
+        """Send one field to the unit and reflect it locally straight away.
+
+        This runs on the main thread from handle_key, so it must not wait on
+        the network: midea-local's setters are fire-and-forget at the protocol
+        layer, and the real value arrives on the device's own thread when it
+        parses the ack. It used to sleep 0.3s here and re-read — which stalled
+        the UI on every keypress *and* still lost races, leaving the next
+        arrow press to step from a stale setpoint. Now the send returns
+        immediately and the local mirror is corrected by the next poll tick,
+        at most a second later."""
+        if not self.mock:
+            dev = self._devices.get(unit_id)
+            if dev is None:
+                return
+            try:
+                if fld.api_key == "operational_mode":
+                    dev.set_attribute("mode", _MODE_TO_INT[fld.value])
+                elif fld.api_key == "fan_speed":
+                    dev.set_attribute("fan_speed", _FAN_TO_INT[fld.value])
+                elif fld.api_key == "swing_mode":
+                    vertical, horizontal = _SWING_TO_BOOLS[fld.value]
+                    dev.set_swing(vertical, horizontal)
+                elif fld.api_key == "target_temperature":
+                    dev.set_target_temperature(self.target_c_for(unit_id, fld.value), None)
+                elif fld.api_key == "eco":
+                    dev.set_attribute("eco_mode", fld.value)
+                elif fld.api_key == "turbo":
+                    dev.set_attribute("boost_mode", fld.value)
+                elif fld.api_key == "display_on":
+                    dev.set_attribute("screen_display", fld.value)
+                else:  # "power_state"
+                    dev.set_attribute("power", fld.value)
+            except Exception as e:
+                self.error = f"Command to unit {unit_id} failed: {type(e).__name__}"
+                return
+        self._mirror_edit(unit_id, fld)
+
+    def _mirror_edit(self, unit_id: int, fld: EditableField) -> None:
+        """Apply an edit to the cached unit so the card responds to the
+        keypress at once. Safe to do ahead of the device for temperature
+        because the value sent is already on the unit's half-degree grid, so
+        this mirrors exactly what it will report back; any other field the
+        unit refuses is corrected within a poll tick. In mock mode this *is*
+        the whole edit — there's no device to send to."""
         prev = self._units.get(unit_id)
         if prev is None:
             return
         if fld.api_key == "target_temperature":
-            value = _f_to_c(fld.value) if prev.fahrenheit else float(fld.value)
             with self._lock:
-                self._units[unit_id] = dataclasses.replace(prev, target_temp_c=value)
+                self._units[unit_id] = dataclasses.replace(
+                    prev, target_temp_c=self.target_c_for(unit_id, fld.value)
+                )
             return
         field_name = _API_KEY_TO_UNIT_FIELD.get(fld.api_key)
         if field_name is None:
@@ -620,6 +773,14 @@ class MideaSystem(System):
         self.selected = 0  # index into _online_units()
         self.scroll = 0
         self._num_buf: str | None = None
+
+    @property
+    def poll_interval_focused(self) -> float:
+        return SETTLE_POLL_INTERVAL if self.ctl.settling else 1.0
+
+    @property
+    def poll_interval_idle(self) -> float:
+        return SETTLE_POLL_INTERVAL if self.ctl.settling else 5.0
 
     @property
     def collapsed_height(self) -> int:
@@ -705,6 +866,12 @@ class MideaSystem(System):
             # a single dimmed "connecting…" line rather than a card full of
             # fabricated defaults.
             return [self._dim(header)]
+        if not u.caps_known:
+            # Status has landed but the capabilities reply hasn't: the header
+            # is all real (badge, name, temperatures), while the option rows
+            # would be placeholder defaults. Show the header alone until the
+            # unit tells us what it actually supports.
+            return [header if u.online and u.power else self._dim(header)]
         row_a = self._row_a(u, width)
         row_b = self._row_b(u, width)
         if not u.online or not u.power:
