@@ -187,6 +187,108 @@ One `Line`-based selection primitive in `ui.py`, e.g.
   every panel, consistently.
 - Selection looks identical across panels, modulo each system's accent colour.
 
+## YouTube Music search + playback in the Sonos panel
+
+**Scope:** `home_control/systems/sonos.py`
+
+### Goal
+
+Search YouTube Music from the panel and get a result actually playing on a
+speaker.
+
+### Why this isn't a simple search box
+
+Sonos's own app can search-and-play YTM because it's a registered client with
+Google's SMAPI — Sonos owns the signed API key for that trust relationship, we
+don't. Every path we tried to get around that is a dead end, live-verified:
+
+- The old `x-sonos-http:{videoId}.mp4?sid=284` URI scheme is dead — UPnP
+  error 800 on add; bare videoIds are rejected at `AddURIToQueue` time.
+- Direct SMAPI search (`soco.music_services.MusicService.search()`) calls
+  Google's cloud endpoint straight from our machine using an AppLink/OAuth
+  token that requires Sonos's own client registration — `music.googleapis.com`
+  returns 403 "unregistered callers". This is structural (confirmed at the
+  `soco` source level: `soap_client.endpoint` is the service's own cloud URI,
+  not the local speaker), not a bug we can work around.
+- Sonos's official Cloud Control API (`api.ws.sonos.com`, OAuth-linkable like
+  we do for Midea) doesn't help either — its content-discovery surface is
+  only `getFavorites`/`loadFavorite` and `getPlaylists`/`loadPlaylist`, plus a
+  `musicServiceAccounts.match` endpoint for *linking* an account. No
+  search/browse-into-a-service endpoint exists. That capability lives in
+  SMAPI, which is a Sonos↔Google trust relationship, not something exposed to
+  third-party control apps.
+- Tried having the *speaker itself* resolve a search via its local
+  `ContentDirectory` UPnP service (it already holds a valid SMAPI session, so
+  in theory it could proxy a query without us needing our own credentials).
+  Live-tested: root `Browse` exposes only local containers (`A:` library,
+  `S:` shares, `SQ:` saved queues, `R:` radio, `FV:` favorites, `Q:` queues)
+  — no per-service container. Probing candidate service-root object IDs
+  (built from the account's own desc token) returned `UPnP Error 701: No
+  such object`. Not browsable on current firmware.
+- No voice assistant gets around this either, for the same reason: Alexa
+  doesn't support YouTube Music as a linked service at all (business
+  decision, not technical), and Siri's Sonos control is hard-locked to Apple
+  Music via AirPlay 2. The only assistant that ever had a real path (Google
+  Assistant, talking to Google's own service) is being actively phased out of
+  Sonos hardware amid Sonos/Google patent litigation, not expanded.
+- Enqueuing a favorited YTM playlist/album *container*
+  (`x-rincon-cpcontainer:…` + its `resource_meta_data`) **does** work — the
+  speaker expands it into native HLS tracks via its own SMAPI session.
+  Verified: a 21-track album expanded fine. This is the one thing we can
+  build on.
+- `ytmusicapi`: unauthenticated search works (no cookies needed). Writes
+  (`create_playlist`, adding items) need authenticated cookies.
+
+### Chosen design — playlist trampoline
+
+1. **Search** — unauthenticated `ytmusicapi` search, shown in the panel.
+2. **Write** — on selection, authenticated `ytmusicapi` replaces the contents
+   of one dedicated private YTM playlist (e.g. "home-control") with the
+   chosen track(s).
+3. **One-time setup** — the user favorites that playlist in the Sonos app
+   once, giving us a Sonos Favorite whose URI points at a container the
+   speaker already knows how to expand.
+4. **Play** — `AddURIToQueue` that Favorite; the speaker re-expands it with
+   the new contents via its own linked session.
+
+Not instant single-track playback — there's a beat of indirection (rewrite
+playlist → reload favorite) instead of one direct "play this" call.
+
+### Live bug to fix along the way
+
+`soco`'s `add_uri_to_queue()` does *not* take metadata — its 2nd positional
+arg is queue position — but `SonosController.play_favorite` currently passes
+`fav.metadata` there (`home_control/systems/sonos.py`). Enqueuing a container
+favorite needs the raw `avTransport.AddURIToQueue` SOAP call with hand-built
+DIDL (musicTrack/container class + the account's desc token) instead.
+
+### Open risks
+
+- Unverified whether SMAPI serves *fresh* playlist contents on every
+  expansion, or whether the speaker caches — needs a live test once we have
+  working write auth.
+- Current cookie file for `ytmusicapi` writes is stale (401 on
+  `create_playlist`); needs to be refreshed before this can be built end to
+  end.
+
+### Live-testing safety
+
+Safe-test protocol: only ever send commands to a speaker confirmed idle and
+cleared for testing (never one that could wake people).
+
+### Alternative worth considering: connect Spotify instead
+
+Spotify assigns tracks a stable, public catalog ID (`spotify:track:…`) — the
+same ID from Spotify's own public Web API as from inside the Sonos app —
+unlike YTM's Sonos-minted opaque IDs. That means `x-sonos-spotify:` queue URIs
+can be built directly from a search result and `AddURIToQueue`'d with no
+trampoline needed: real single-track search-and-play, immediately. This is a
+well-established community pattern (`node-sonos-http-api`, `sonoscli`,
+multiple `SoCo` issues), not yet live-verified against our hardware — would
+need Spotify actually linked to the Sonos system first. If Spotify covers the
+use case, it's a substantially better UX than the YTM trampoline and worth
+building instead.
+
 ## Config wizard
 
 On first run, or with a command line arg. Use existing discovery code
