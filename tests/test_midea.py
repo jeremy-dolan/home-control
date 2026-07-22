@@ -438,3 +438,16 @@ def test_celsius_setpoint_is_quantized_too(monkeypatch):
     ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
                                     contacted=True, fahrenheit=False)
     assert ctl.target_c_for(1, 23) == 23.0
+
+
+def test_edit_mirrors_locally_without_waiting(mock_env):
+    # apply_edit runs on the main thread from handle_key: it must reflect the
+    # change straight away rather than sleeping on the network.
+    s = midea.MideaSystem()
+    s.poll(True)
+    before = sorted(s.ctl.snapshot().values(), key=lambda u: u.name.lower())
+    unit = next(u for u in before if u.online and u.power)
+    s.selected = [u.id for u in before if u.online].index(unit.id)
+    s.handle_key(curses.KEY_RIGHT)
+    after = s.ctl.snapshot()[unit.id]
+    assert after.target_temp_c > unit.target_temp_c

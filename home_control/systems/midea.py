@@ -59,13 +59,6 @@ from .base import System, VoiceAction
 # auth rate limit — retrying every poll tick (as fast as 1s when focused)
 # would hammer that endpoint, unlike Roku's cheap local-only SSDP retry.
 DISCOVERY_RETRY_INTERVAL = 60
-# Fixed settle delay after sending a command before re-reading device state
-# for the mirrored cache. midea-local's set_attribute()/set_target_temperature()
-# are fire-and-forget at the protocol layer — the actual attribute update
-# lands asynchronously once the unit's persistent background thread parses
-# its ack, which is sub-second on a LAN.
-EDIT_SETTLE_DELAY = 0.3
-
 # The AC's setpoint resolution: it stores half-degrees Celsius, and
 # MessageGeneralSet encodes the integer part with int() but the half-degree
 # bit with round(t * 2) — so a value that isn't already a multiple of 0.5
@@ -525,47 +518,50 @@ class MideaController:
         return _quantize_c(_f_to_c(display_value) if fahrenheit else float(display_value))
 
     def apply_edit(self, unit_id: int, fld: EditableField) -> None:
-        """Push one edited field to the live device and mirror the result into
-        the cache. midea-local's setters are fire-and-forget at the protocol
-        layer (the actual state update lands via the device's own background
-        thread once it parses the ack) — sleep a short settle delay, then
-        rebuild the cached MideaUnit from the device's *actual* current
-        state, never optimistically."""
-        if self.mock:
-            self._apply_edit_mock(unit_id, fld)
-            return
-        dev = self._devices.get(unit_id)
-        if dev is None:
-            return
-        try:
-            if fld.api_key == "operational_mode":
-                dev.set_attribute("mode", _MODE_TO_INT[fld.value])
-            elif fld.api_key == "fan_speed":
-                dev.set_attribute("fan_speed", _FAN_TO_INT[fld.value])
-            elif fld.api_key == "swing_mode":
-                vertical, horizontal = _SWING_TO_BOOLS[fld.value]
-                dev.set_swing(vertical, horizontal)
-            elif fld.api_key == "target_temperature":
-                dev.set_target_temperature(self.target_c_for(unit_id, fld.value), None)
-            elif fld.api_key == "eco":
-                dev.set_attribute("eco_mode", fld.value)
-            elif fld.api_key == "turbo":
-                dev.set_attribute("boost_mode", fld.value)
-            elif fld.api_key == "display_on":
-                dev.set_attribute("screen_display", fld.value)
-            else:  # "power_state"
-                dev.set_attribute("power", fld.value)
-        except Exception as e:
-            self.error = f"Command to unit {unit_id} failed: {type(e).__name__}"
-            return
-        time.sleep(EDIT_SETTLE_DELAY)
-        with self._lock:
-            self._units[unit_id] = _unit_from_device(dev, self._ips.get(unit_id, ""))
+        """Send one field to the unit and reflect it locally straight away.
 
-    def _apply_edit_mock(self, unit_id: int, fld: EditableField) -> None:
-        """Mock mode has no real device to push a command to — mutate the
-        fixture directly instead, so hotkeys are actually interactive when
-        developing/demoing against HOME_CONTROL_MOCK=1."""
+        This runs on the main thread from handle_key, so it must not wait on
+        the network: midea-local's setters are fire-and-forget at the protocol
+        layer, and the real value arrives on the device's own thread when it
+        parses the ack. It used to sleep 0.3s here and re-read — which stalled
+        the UI on every keypress *and* still lost races, leaving the next
+        arrow press to step from a stale setpoint. Now the send returns
+        immediately and the local mirror is corrected by the next poll tick,
+        at most a second later."""
+        if not self.mock:
+            dev = self._devices.get(unit_id)
+            if dev is None:
+                return
+            try:
+                if fld.api_key == "operational_mode":
+                    dev.set_attribute("mode", _MODE_TO_INT[fld.value])
+                elif fld.api_key == "fan_speed":
+                    dev.set_attribute("fan_speed", _FAN_TO_INT[fld.value])
+                elif fld.api_key == "swing_mode":
+                    vertical, horizontal = _SWING_TO_BOOLS[fld.value]
+                    dev.set_swing(vertical, horizontal)
+                elif fld.api_key == "target_temperature":
+                    dev.set_target_temperature(self.target_c_for(unit_id, fld.value), None)
+                elif fld.api_key == "eco":
+                    dev.set_attribute("eco_mode", fld.value)
+                elif fld.api_key == "turbo":
+                    dev.set_attribute("boost_mode", fld.value)
+                elif fld.api_key == "display_on":
+                    dev.set_attribute("screen_display", fld.value)
+                else:  # "power_state"
+                    dev.set_attribute("power", fld.value)
+            except Exception as e:
+                self.error = f"Command to unit {unit_id} failed: {type(e).__name__}"
+                return
+        self._mirror_edit(unit_id, fld)
+
+    def _mirror_edit(self, unit_id: int, fld: EditableField) -> None:
+        """Apply an edit to the cached unit so the card responds to the
+        keypress at once. Safe to do ahead of the device for temperature
+        because the value sent is already on the unit's half-degree grid, so
+        this mirrors exactly what it will report back; any other field the
+        unit refuses is corrected within a poll tick. In mock mode this *is*
+        the whole edit — there's no device to send to."""
         prev = self._units.get(unit_id)
         if prev is None:
             return
