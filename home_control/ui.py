@@ -53,7 +53,7 @@ PALETTE = {
     "hue_blue":     "#33AAFF",  # bright daylight blue
     "roku_purple":  "#A855F7",  # bright violet — reads well on a black terminal
     "sonos_yellow": "#FFE24D",  # bright warm yellow
-    "yoto_orange":  "#FF8C42",  # warm amber/orange
+    "yoto_orange":  "#F2820B",  # true orange — redder bases read burnt, paler ones lighten() to peach
     "midea_teal":   "#14B8A6",  # cool teal (kept clear of the bright blue)
 }
 
@@ -223,6 +223,10 @@ class Seg:
     bold: bool = False
     dim: bool = False
     reverse: bool = False
+    # False pins this run to its own colour when the row is selected, exempting
+    # it from highlight()'s accent lift. The ▶ cursor uses it: it is already the
+    # thing marking the row, so brightening it too says nothing extra.
+    lift: bool = True
 
 
 Line = list[Seg]
@@ -386,7 +390,27 @@ def cursor(accent: str, sel: bool) -> Seg:
     blanks otherwise. The app never uses reverse video to mark a selection — the
     cursor plus bolding the row does that job (see "UI conventions" in
     ARCHITECTURE.md), so every list builds its rows starting with this Seg."""
-    return Seg("▶ ", accent, bold=True) if sel else Seg("  ")
+    return Seg("▶ ", accent, bold=True, lift=False) if sel else Seg("  ")
+
+
+def highlight(line: Line, accent: str) -> Line:
+    """Mark a whole row as selected: bold every segment, clear dim so the bold
+    reads, and lift every segment already carrying ``accent`` to ``lighten(accent)``.
+
+    That last step is what keeps a selected row coherent. A_BOLD can't brighten a
+    256-color pair, so a row whose bar was explicitly lightened but whose accent
+    text was only bolded ends up half-highlighted — the slider moves, the ``● ON``
+    beside it doesn't. Callers therefore build rows with the *base* accent
+    throughout and let this do the lifting. Segments marked ``lift=False`` — the
+    ▶ cursor — keep their own colour. Mutates and returns the same list.
+    """
+    bright = lighten(accent)
+    for s in line:
+        s.bold = True
+        s.dim = False
+        if s.lift and s.color == accent:
+            s.color = bright
+    return line
 
 
 def select_row(region: Region, row: int, text: str, *, sel: bool, accent: str,

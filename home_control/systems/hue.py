@@ -29,11 +29,11 @@ from ..ui import (
     Seg,
     badge_color,
     cursor,
+    highlight,
     hint,
     hint_row,
     justify,
     level_bar,
-    lighten,
     pad_between,
     rgb_color,
 )
@@ -936,15 +936,6 @@ class HueSystem(System):
             self.scroll = focus - visible + 1
         self.scroll = max(0, min(self.scroll, max(0, total - visible)))
 
-    @staticmethod
-    def _highlight(line: Line) -> Line:
-        """Make a whole row stand out as selected: bold every segment (and clear
-        dim so the bold reads). Mutates and returns the same list."""
-        for s in line:
-            s.bold = True
-            s.dim = False
-        return line
-
     def _room_row(self, room: Room, width: int, *, selected: bool, scenes_suffix: bool = False) -> Line:
         # Selection cue: an accent ▶ cursor + the whole row bolded (no reverse video).
         cur = cursor(self.color, selected)
@@ -952,7 +943,7 @@ class HueSystem(System):
         left = [cur, Seg(name, self.color, bold=True)]
         right = [] if scenes_suffix else [Seg("←→ bri", self.color, dim=True)]
         line = justify(left, right, width)
-        return self._highlight(line) if selected else line
+        return highlight(line, self.color) if selected else line
 
     def _light_row(self, ls: Light, width: int, *, selected: bool) -> Line:
         cur = cursor(self.color, selected)
@@ -965,16 +956,13 @@ class HueSystem(System):
             line = [cur, name, Seg("    "),
                     Seg("unreachable".center(BAR_WIDTH), "muted"),
                     Seg("  "), Seg("●", "muted")]
-            return self._highlight(line) if selected else line
+            return highlight(line, self.color) if selected else line
         # On/off is the panel accent vs muted, not green vs red: an off lamp is
         # an ordinary state, and red made a dim room look like a failure.
         state_color = self.color if ls.on else "muted"
-        # Selected rows use a lighter accent for the filled bar (bold alone can't
-        # brighten a custom 256-colour accent).
-        bar_color = lighten(self.color) if selected else self.color
         left = [
             cur, name, Seg("    "),
-            *brightness_bar(ls.brightness, ls.on, bar_color),
+            *brightness_bar(ls.brightness, ls.on, self.color),
             Seg("  "), Seg("● ", state_color), Seg("ON" if ls.on else "OFF", state_color),
         ]
         info = light_color(ls) if ls.on else None
@@ -984,7 +972,7 @@ class HueSystem(System):
             line = justify(left, right, width)
         else:
             line = left
-        return self._highlight(line) if selected else line
+        return highlight(line, self.color) if selected else line
 
     def _composite_rows(self, width: int) -> tuple[list[Line], int]:
         """Room/light rows for the main list, with the active scenes list or

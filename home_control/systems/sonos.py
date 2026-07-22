@@ -36,11 +36,11 @@ from ..ui import (
     Seg,
     badge_color,
     cursor,
+    highlight,
     hint,
     hint_row,
     justify,
     level_bar,
-    lighten,
     pad_between,
     select_row,
 )
@@ -1038,17 +1038,12 @@ class SonosSystem(System):
         color = badge_color(state, self.color)
         mute = "M" if zone.muted else " "
         group = "+" if zone.grouped else " "
-        # Filled bar: the accent, brightened when selected. lighten() allocates a
-        # real lighter colour pair, so the highlight doesn't depend on the terminal
-        # rendering bold as a bright colour (heavy bar glyphs barely show bold
-        # weight anyway). Same mechanism as Hue's brightness bar.
-        bar_color = lighten(self.color) if active else self.color
         segs: Line = [
             cursor(self.color, active),
             Seg(f"{zone.name:<16}  "),
             Seg(f"{label:<10}", color),
             Seg(f"  {mute}{group}  "),
-            *volume_bar(zone.volume, bar_color),
+            *volume_bar(zone.volume, self.color),
             Seg(f" {zone.volume:>3}%  "),
         ]
         used = sum(len(s.text) for s in segs)
@@ -1056,11 +1051,9 @@ class SonosSystem(System):
         if track and track.title and used < width:
             t = track.title + (f"  —  {track.artist}" if track.artist else "")
             segs.append(Seg(trunc(t, width - used), dim=True))
-        if active:  # selection cue: bold the whole row (no reverse video)
-            for s in segs:
-                s.bold = True
-                s.dim = False
-        return segs
+        # Selection cue: bold the row and lift its accent segments (no reverse
+        # video) — the badge and bar brighten together with the cursor.
+        return highlight(segs, self.color) if active else segs
 
     def _render_queue(self, region: Region) -> None:
         items = self.ctl.queue_items

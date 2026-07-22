@@ -138,58 +138,47 @@ off-screen. Move `_refresh_active_after`'s `sleep`+re-poll onto the worker too.
 
 ## Unify row-selection styling into shared ui helpers
 
-**Priority:** low · **Scope:** `home_control/ui.py`, all panels (`hue.py`,
-`sonos.py`, `midea.py`, `roku.py`)
+**Priority:** low · **Scope:** `home_control/ui.py`, `roku.py`, `sonos.py`
 
-### Problem
+### Status
 
-Every panel re-implements "this row is selected" styling, and they've drifted,
-so selecting a light, a speaker, and an AC don't guarantee the same look:
+Mostly done. `ui.cursor(accent, sel)` is the single source for the `▶ `/`  `
+cursor, and `ui.highlight(line, accent)` does the whole-row treatment: bold
+every segment, clear dim so the bold reads, and lift any segment carrying the
+accent to `lighten(accent)`. Hue and Sonos route their rows through it; Hue's
+`_highlight` and Sonos's inline bold loop are gone, and neither the brightness
+bar nor the volume bar computes its own `lighten()` any more.
 
-- ~~**Cursor**: `Seg("▶ ", self.color, bold=True) if sel else Seg("  ")` is
-  copy-pasted in ~6 places (Hue `_room_row`/`_light_row`/scene/device rows,
-  Sonos `_zone_row`, Midea).~~ Done — `ui.cursor(accent, sel)` is now the single
-  source, and `ui.select_row` builds on it.
-- **Whole-row bold**: Hue has a `_highlight()` method (bold every seg, clear
-  dim); Sonos `_zone_row` inlines the same loop; `ui.select_row` bolds only the
-  single string it draws. Three implementations of one idea.
-- **Widget brightening**: the Hue brightness bar and the Sonos volume bar each
-  need an *explicit* `lighten()` on select (bold can't brighten their colours,
-  and on the heavy bar glyphs bold weight barely reads) — computed separately in
-  each file. Meanwhile badge/text colours still lean on the terminal rendering
-  bold as bright, so the brightening story is inconsistent even within one row.
-- **Two incompatible abstractions**: `ui.select_row` draws straight into a
-  Region, so rows built as a `Line` (list of `Seg`) can't use it and roll their
-  own instead.
+The implementation inverted the flag this entry originally proposed. Rather than
+opting widgets *in* with `brighten=True`, `highlight()` lifts everything already
+carrying the accent and segments opt *out* with `Seg(lift=False)` — which the
+cursor uses, so the marker itself stays at the base shade while the row it marks
+brightens.
 
-Any tweak to the selection cue currently has to be made in several places.
+### What's left
 
-### Proposed direction
+- **Two abstractions still.** `ui.select_row` draws straight into a Region
+  (Roku's app list, Sonos's queue and favorites), so plain-text rows and
+  `Line`-built rows take different paths. They share `cursor()` now, but there
+  is no single entry point. Folding `select_row` into a thin wrapper over
+  `highlight()` is the remaining cleanup.
 
-One `Line`-based selection primitive in `ui.py`, e.g.
-`select_line(line, *, selected, accent) -> Line` that:
+### Not doing: identical selection in every panel
 
-- prepends the standard `▶ `/`  ` cursor in the accent colour,
-- applies the whole-row bold + un-dim,
-- brightens marked segments explicitly instead of relying on bold-as-bright —
-  likely via a `Seg` flag (e.g. `brighten=True`) tagging accent-coloured widgets
-  (bars, knobs) so the helper swaps in `lighten(color)` on select. Text keeps
-  bold (its weight reads as selected regardless of terminal).
+The original "done when" asked that selection look identical across panels. That
+is too strong, and Midea is the counterexample — leave it as it is.
 
-`ui.select_row` then becomes a thin wrapper that draws the result; each panel's
-`_*_row` builds a plain `Line` and hands it to the helper. Retire Hue's
-`_highlight` and Sonos's inline bold loop.
+Midea marks selection with the cursor alone; it never calls `highlight()`. Its
+`_dim()` is a *state* cue, not a selection one: an off or unreachable unit is
+dimmed whether or not it is selected (which is why `_card_rows` restores the
+accent cursor over the dimming — an off unit is still selectable, to power it
+back on). Row-bolding a Midea card would collide with that, since dim already
+means "off/unreachable", and the panel shows only ~3 always-expanded 3-line
+cards where a whole bolded card reads as noise rather than focus.
 
-### Done when
-
-- Hue, Sonos, and Midea selectable rows all route through the shared helper; no
-  panel re-implements the cursor or the bold loop.
-- Filled-bar/slider brightening is terminal-independent (explicit lighten) for
-  every panel, consistently.
-- Selection looks identical across panels, modulo each system's accent colour.
-
-The cursor bullet is resolved; the whole-row bold loop, the `select_line`
-primitive, and per-panel widget brightening are all still outstanding.
+The convention to document instead: **the cursor is the guaranteed selection
+cue in every panel; row-bold + accent lift is an optional reinforcement that
+dense scrolling lists (Hue, Sonos) use and card layouts (Midea) do not.**
 
 ## YouTube Music search + playback in the Sonos panel
 
