@@ -400,3 +400,41 @@ def test_cached_metadata_carries_no_probe_seed(monkeypatch):
         {"123": {**_CACHED_ENTRY, "unsupported": ["MessageCapabilitiesQuery"]}},
     )
     assert "_unsupported" not in ctl._discover_raw()[123]
+
+
+# --- setpoint encoding ------------------------------------------------------
+
+
+def _wire_roundtrip(celsius: float) -> float:
+    """What the unit ends up storing, per midealocal MessageGeneralSet._body
+    (int() for the whole degrees, round(t*2) for the half-degree bit) and the
+    matching decode."""
+    byte = (int(celsius) & 0xF) | (0x10 if round(celsius * 2) % 2 != 0 else 0)
+    return 16 + (byte & 0xF) + (0.5 if byte & 0x10 else 0.0)
+
+
+def test_quantize_snaps_to_half_degrees():
+    assert midea._quantize_c(22.7778) == 23.0
+    assert midea._quantize_c(21.6667) == 21.5
+    assert midea._quantize_c(22.0) == 22.0
+
+
+def test_every_fahrenheit_setpoint_survives_the_wire(monkeypatch):
+    # Regression: stepping 72°F -> 73°F sent 22.778°C, which encoded to a flat
+    # 22.0°C — the setpoint never moved and the right arrow looked dead. Each
+    # whole °F must land on its own half-degree and read back as itself.
+    ctl = _pinned_controller(monkeypatch, [])
+    ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
+                                    contacted=True, fahrenheit=True)
+    for f in range(61, 87):
+        sent = ctl.target_c_for(1, f)
+        stored = _wire_roundtrip(sent)
+        assert stored == sent, f"{f}°F sent {sent}°C but the unit stores {stored}°C"
+        assert round(midea._c_to_f(stored)) == f, f"{f}°F reads back as {midea._c_to_f(stored)}°F"
+
+
+def test_celsius_setpoint_is_quantized_too(monkeypatch):
+    ctl = _pinned_controller(monkeypatch, [])
+    ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
+                                    contacted=True, fahrenheit=False)
+    assert ctl.target_c_for(1, 23) == 23.0

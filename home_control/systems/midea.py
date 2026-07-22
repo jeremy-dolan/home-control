@@ -66,6 +66,15 @@ DISCOVERY_RETRY_INTERVAL = 60
 # its ack, which is sub-second on a LAN.
 EDIT_SETTLE_DELAY = 0.3
 
+# The AC's setpoint resolution: it stores half-degrees Celsius, and
+# MessageGeneralSet encodes the integer part with int() but the half-degree
+# bit with round(t * 2) — so a value that isn't already a multiple of 0.5
+# can set those two halves from different sides and land somewhere else
+# entirely. 22.78°C (73°F stepped up from 72°F) encodes as a flat 22.0°C:
+# the setpoint never moves and the arrow key looks dead. Quantize first and
+# every whole °F maps to its own half-degree, round-tripping exactly.
+TEMP_STEP_C = 0.5
+
 TOKEN_CACHE_PATH = Path(
     os.environ.get("HOME_CONTROL_MIDEA_CACHE")
     or (Path.home() / ".cache" / "home-control" / "midea_tokens.json")
@@ -170,6 +179,11 @@ def _c_to_f(c: float) -> float:
 
 def _f_to_c(f: float) -> float:
     return (f - 32) * 5 / 9
+
+
+def _quantize_c(c: float) -> float:
+    """Snap a Celsius setpoint to the half-degree grid the unit stores."""
+    return round(c / TEMP_STEP_C) * TEMP_STEP_C
 
 
 def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
@@ -503,6 +517,13 @@ class MideaController:
         with self._lock:
             return dict(self._units)
 
+    def target_c_for(self, unit_id: int, display_value: float) -> float:
+        """Convert a setpoint typed/stepped in the unit's own display scale to
+        the half-degree Celsius the protocol can actually carry."""
+        unit = self._units.get(unit_id)
+        fahrenheit = unit.fahrenheit if unit else False
+        return _quantize_c(_f_to_c(display_value) if fahrenheit else float(display_value))
+
     def apply_edit(self, unit_id: int, fld: EditableField) -> None:
         """Push one edited field to the live device and mirror the result into
         the cache. midea-local's setters are fire-and-forget at the protocol
@@ -525,8 +546,7 @@ class MideaController:
                 vertical, horizontal = _SWING_TO_BOOLS[fld.value]
                 dev.set_swing(vertical, horizontal)
             elif fld.api_key == "target_temperature":
-                value = _f_to_c(fld.value) if dev.attributes.get("temp_fahrenheit") else float(fld.value)
-                dev.set_target_temperature(value, None)
+                dev.set_target_temperature(self.target_c_for(unit_id, fld.value), None)
             elif fld.api_key == "eco":
                 dev.set_attribute("eco_mode", fld.value)
             elif fld.api_key == "turbo":
@@ -550,9 +570,10 @@ class MideaController:
         if prev is None:
             return
         if fld.api_key == "target_temperature":
-            value = _f_to_c(fld.value) if prev.fahrenheit else float(fld.value)
             with self._lock:
-                self._units[unit_id] = dataclasses.replace(prev, target_temp_c=value)
+                self._units[unit_id] = dataclasses.replace(
+                    prev, target_temp_c=self.target_c_for(unit_id, fld.value)
+                )
             return
         field_name = _API_KEY_TO_UNIT_FIELD.get(fld.api_key)
         if field_name is None:
