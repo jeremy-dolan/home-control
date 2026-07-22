@@ -26,15 +26,16 @@ with the display for Sonos.  Not sure if aesthetically aligning is good, or
 
 There's also this comment:
 
-def badge(state: str) -> tuple[str, bool]:
-    """(label, dim) for a media-player state; unknown/idle states get IDLE."""
-    return _BADGE.get(state, ("■ IDLE", False))
+def badge(state: str) -> tuple[str, str]:
+    """(label, badge state) for a media-player state; unknown states read as IDLE.
+    `ui.badge_color` turns the state into a color."""
+    return _BADGE.get(state, ("■ IDLE", BADGE_IDLE))
 
 I would be curious to know more about what the 'unknown' states are, that we're
 hiding by using IDLE as a default.
 
-Finally, ■ IDLE should be in grey, not purple, and we should substitute "Roku
-Dynamic Menu" for something less branded and wordy. Maybe "Home"?
+Also should substitute "Roku Dynamic Menu" for something less branded and
+wordy. Maybe "Home"?
 
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
