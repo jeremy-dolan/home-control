@@ -393,6 +393,16 @@ def cursor(accent: str, sel: bool) -> Seg:
     return Seg("▶ ", accent, bold=True, lift=False) if sel else Seg("  ")
 
 
+def toggle_dot(on: bool) -> str:
+    """The app's boolean indicator: filled ● when on, hollow ○ when off.
+
+    Trails its label ("Eco ●"), which is what keeps it clear of the ● status dot
+    that *leads* a badge ("● ONLINE") — that, and the hollow counterpart, which
+    no status dot has.
+    """
+    return "●" if on else "○"
+
+
 def highlight(line: Line, accent: str) -> Line:
     """Mark a whole row as selected: bold every segment, clear dim so the bold
     reads, and lift every segment already carrying ``accent`` to ``lighten(accent)``.

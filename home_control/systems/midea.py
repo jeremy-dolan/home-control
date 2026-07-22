@@ -52,7 +52,20 @@ from midealocal.devices.ac import MideaACDevice
 from midealocal.discover import discover as midea_discover
 
 from .. import config
-from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, cursor, hint, hint_row, justify, wrap
+from ..ui import (
+    BADGE_ACTIVE,
+    BADGE_IDLE,
+    Line,
+    Region,
+    Seg,
+    badge_color,
+    cursor,
+    hint,
+    hint_row,
+    justify,
+    toggle_dot,
+    wrap,
+)
 from .base import System, VoiceAction
 
 # Minimum gap between discovery attempts. A failure here can be a cloud-side
@@ -793,7 +806,7 @@ class MideaSystem(System):
         """Mnemonic first letter always colored; the whole chip goes bold/
         accent when ``value`` is True (the "enabled" state stands out on its
         own, independent of which unit is currently selected)."""
-        dot = "●" if value else "○"
+        dot = toggle_dot(value)
         if value:
             return [Seg(f"{label} {dot}", self.color, bold=True)]
         return [Seg(label[0], self.color, bold=True), Seg(f"{label[1:]} {dot}", dim=True)]

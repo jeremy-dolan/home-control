@@ -43,6 +43,7 @@ from ..ui import (
     level_bar,
     pad_between,
     select_row,
+    toggle_dot,
 )
 from .base import Popup, System
 
@@ -984,12 +985,9 @@ class SonosSystem(System):
         # Play-mode indicator line. The first letter of each control is its hotkey
         # (s/r/c), highlighted in plain white so the toolbar needn't list them.
         if y < region.height:
-            def mark(on: bool) -> str:
-                return "▣" if on else "▢"
-
             def control(name: str, on: bool) -> Line:
                 return [Seg(name[0], "", bold=True),
-                        Seg(f"{name[1:]} {mark(on)}", dim=True)]
+                        Seg(f"{name[1:]} {toggle_dot(on)}", dim=True)]
             gap = Seg("   ", dim=True)
             region.segs(y, [*control("shuffle", zone.shuffle), gap,
                             *control("repeat", zone.repeat), gap,
@@ -1026,9 +1024,8 @@ class SonosSystem(System):
         if f.kind == "info":
             region.text(row, 20, trunc(str(f.value), region.width - 20), dim=True)
         elif f.kind == "bool":
-            txt = "[ on ]" if f.value else "[off ]"
             color = self.color if f.value else "muted"
-            region.text(row, 20, txt, color, bold=sel)
+            region.text(row, 20, toggle_dot(bool(f.value)), color, bold=sel)
         elif f.kind == "int":
             txt = _int_slider(int(f.value), f.min_val, f.max_val) + f"  {f.value}{f.unit}"
             region.text(row, 20, trunc(txt, region.width - 20), bold=sel)
