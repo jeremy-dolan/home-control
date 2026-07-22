@@ -491,7 +491,11 @@ def _sha512_hex(s: str) -> str:
 
 
 def _arc_md5(s: str) -> str:
-    """The firmware's ``ArcMD5``: SHA-512 of the lowercase MD5 hex digest."""
+    """The firmware's ``ArcMD5``: SHA-512 of the lowercase MD5 hex digest.
+
+    The double hash looks like a bug but is exactly what the CR1000A's login
+    JS does — don't "simplify" it to a plain MD5; the router would reject it.
+    """
     return _sha512_hex(_md5_hex(s))
 
 
@@ -1058,6 +1062,9 @@ class RouterController:
         if common:
             link = self._soap(common, "GetCommonLinkProperties")
             access = link.get("NewWANAccessType", "")
+            # The CR1000A reports power-of-two placeholders here (8388608 /
+            # 4194304), not the real gigabit link rate — captured but never
+            # surfaced in the panel because they're meaningless.
             up_max = _to_int(link.get("NewLayer1UpstreamMaxBitRate"))
             down_max = _to_int(link.get("NewLayer1DownstreamMaxBitRate"))
             sent = _to_int(self._soap(common, "GetTotalBytesSent").get("NewTotalBytesSent"))
