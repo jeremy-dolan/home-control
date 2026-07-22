@@ -134,7 +134,10 @@ off-screen. Move `_refresh_active_after`'s `sleep`+re-poll onto the worker too.
   why a first-touch of an unreachable speaker can still take ~10s to fail.
 - Then apply the same worker-dispatch pattern to the other systems (Hue
   `_set_light`, Roku `_post`, Router auth) — lower priority (short timeouts), but
-  the same main-thread-blocking smell.
+  the same main-thread-blocking smell. Midea's worst case is already gone
+  (`45746be` dropped a `time.sleep(0.3)` + re-read from `apply_edit`, which
+  stalled the UI on every keypress *and* raced the ack); what remains there is
+  the fire-and-forget `socket.send` itself, with no round-trip to block on.
 
 ## Unify row-selection styling into shared ui helpers
 
