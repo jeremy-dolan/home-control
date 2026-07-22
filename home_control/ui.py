@@ -228,6 +228,22 @@ class Seg:
 Line = list[Seg]
 
 
+def level_bar(value: float, maximum: float, color: str = "", width: int = 20, *,
+              empty: bool = False) -> Line:
+    """A ━━━━◉──── level bar (no brackets): the filled run with a ◉ knob at its
+    head in `color`, the remaining track dim.
+
+    `empty` draws just the dim track, for a control that is off — the row's own
+    ON/OFF badge carries that state, so the bar doesn't need to repeat it. The
+    knob is ◉ rather than ● so it stays distinct from the ● status dot that
+    leads almost every row.
+    """
+    if empty:
+        return [Seg("─" * width, dim=True)]
+    f = max(1, min(width, round(value / maximum * width)))
+    return [Seg("━" * (f - 1) + "◉", color), Seg("─" * (width - f), dim=True)]
+
+
 def pad_between(left: str, right: str, width: int) -> str:
     """Left + right justified within width (right pushed to the far edge)."""
     gap = width - len(left) - len(right)

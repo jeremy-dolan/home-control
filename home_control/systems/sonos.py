@@ -39,6 +39,7 @@ from ..ui import (
     hint,
     hint_row,
     justify,
+    level_bar,
     lighten,
     pad_between,
     select_row,
@@ -173,10 +174,8 @@ def trunc(text: str, width: int) -> str:
 
 
 def volume_bar(vol: int, color: str = "", width: int = 12) -> Line:
-    """A ━━━●─── level bar (no brackets): the filled run plus a ● knob at its head in
-    `color`, the remaining track dim."""
-    f = max(1, min(width, round(vol / 100 * width)))
-    return [Seg("━" * (f - 1) + "●", color), Seg("─" * (width - f), dim=True)]
+    """The shared `ui.level_bar` over a 0-100 volume percentage."""
+    return level_bar(vol, 100, color, width)
 
 
 def _balance_to_pct(dev) -> int:

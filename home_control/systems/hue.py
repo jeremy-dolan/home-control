@@ -32,6 +32,7 @@ from ..ui import (
     hint,
     hint_row,
     justify,
+    level_bar,
     lighten,
     pad_between,
     rgb_color,
@@ -153,13 +154,9 @@ def next_bri(current: int, direction: int) -> int | None:
 
 
 def brightness_bar(bri: int, on: bool, color: str = "", width: int = BAR_WIDTH) -> Line:
-    """A ━━━●─── level bar (no brackets): the filled run plus a ● knob at its head in
-    `color`, the remaining track dim. When off, just the dim empty track — the [OFF]
-    tag already carries the state."""
-    if not on:
-        return [Seg("─" * width, dim=True)]
-    f = max(1, min(width, round(bri / 254 * width)))
-    return [Seg("━" * (f - 1) + "◉", color), Seg("─" * (width - f), dim=True)]
+    """The shared `ui.level_bar` over Hue's 0-254 brightness scale. An off light
+    draws the empty track — its ● ON/OFF badge already carries the state."""
+    return level_bar(bri, 254, color, width, empty=not on)
 
 
 # ---------------------------------------------------------------------------
