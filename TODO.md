@@ -146,9 +146,10 @@ off-screen. Move `_refresh_active_after`'s `sleep`+re-poll onto the worker too.
 Every panel re-implements "this row is selected" styling, and they've drifted,
 so selecting a light, a speaker, and an AC don't guarantee the same look:
 
-- **Cursor**: `Seg("▶ ", self.color, bold=True) if sel else Seg("  ")` is
+- ~~**Cursor**: `Seg("▶ ", self.color, bold=True) if sel else Seg("  ")` is
   copy-pasted in ~6 places (Hue `_room_row`/`_light_row`/scene/device rows,
-  Sonos `_zone_row`, Midea).
+  Sonos `_zone_row`, Midea).~~ Done — `ui.cursor(accent, sel)` is now the single
+  source, and `ui.select_row` builds on it.
 - **Whole-row bold**: Hue has a `_highlight()` method (bold every seg, clear
   dim); Sonos `_zone_row` inlines the same loop; `ui.select_row` bolds only the
   single string it draws. Three implementations of one idea.
@@ -186,6 +187,9 @@ One `Line`-based selection primitive in `ui.py`, e.g.
 - Filled-bar/slider brightening is terminal-independent (explicit lighten) for
   every panel, consistently.
 - Selection looks identical across panels, modulo each system's accent colour.
+
+The cursor bullet is resolved; the whole-row bold loop, the `select_line`
+primitive, and per-panel widget brightening are all still outstanding.
 
 ## YouTube Music search + playback in the Sonos panel
 
@@ -307,3 +311,46 @@ ln -s ~/.local/share/home-control/venv/bin/home-control \
 
 however, probably should direct users to make an 'editable' install so it
 can be extended to their devices
+
+## Sync clock option for the Lighting panel
+
+**Priority:** low · **Scope:** `home_control/systems/hue.py` (bridge-info
+sub-mode, `HueController`)
+
+### Problem
+
+The bridge-info view (`b` from the Lighting panel) checks the bridge clock
+against the local one and flags drift over `CLOCK_DRIFT_WARN` (60s) by
+suffixing the "UTC time" and "Local time" rows with " (out of sync?)" in
+`fault` red. That is the right severity — a drifted clock silently misfires
+any schedule the bridge runs — but the panel only reports it. There is no way
+to act on it without leaving the app for the Hue app or the bridge's web UI.
+
+### Proposed direction
+
+A hotkey in the bridge-info sub-mode (the sub-mode has no key of its own yet)
+that pushes the correct time to the bridge, with the usual command treatment:
+run off the main thread, confirm via `set_status`, re-poll the config after.
+
+Needs API research first — do not assume the shape:
+
+- The v1 CLIP API exposes the clock under `PUT /api/<user>/config`, and the
+  drift check already reads `UTC` back from `GET .../config`. Whether that
+  field is writable (versus read-only and NTP-managed) has **not** been
+  verified against the real bridge — check before designing the UI around it.
+- Bridges normally keep time over NTP themselves, so persistent drift may mean
+  the bridge cannot reach an NTP server rather than that its clock needs a
+  nudge. If so, a one-shot "set the time" would silently drift again and the
+  honest fix is to surface *why* (no internet / blocked NTP) instead. The
+  bridge config's `internetservices` block already reports internet
+  reachability and is displayed two rows below the drift warning.
+- If the field turns out to be read-only, the fallback is to drop the action
+  and instead make the warning explain itself in the `?` help.
+
+### Done when
+
+- The drift warning is actionable, or is documented as un-actionable with the
+  reason shown in-panel.
+- Whatever the resolution, the behaviour is covered by a mock-mode test — the
+  fixture bridge clock is fixed at `2026-07-21`, so the drift path is always
+  live under `HOME_CONTROL_MOCK=1`.
