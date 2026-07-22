@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, select_row
+from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, hint, hint_row, select_row
 from .base import System, VoiceAction
 
 ECP_PORT = 8060
@@ -71,11 +71,11 @@ APP_SHORTCUTS = {
     "A": ("551012", "Apple TV"),
 }
 
-# Badge label + dim flag. Every state renders in the Roku accent: bright/bold
-# for PLAYING and IDLE, dimmed for PAUSED — no semantic colors here.
+# Badge label + badge state. A Roku that is playing carries the accent; paused
+# and idle are both "not doing anything right now" and go muted.
 _BADGE = {
-    "play": ("▶ PLAYING", False),
-    "pause": ("⏸ PAUSED", True),
+    "play": ("▶ PLAYING", BADGE_ACTIVE),
+    "pause": ("⏸ PAUSED", BADGE_IDLE),
 }
 
 # Voice button name -> ECP keypress.
@@ -88,9 +88,10 @@ _VOICE_KEYS = {
 }
 
 
-def badge(state: str) -> tuple[str, bool]:
-    """(label, dim) for a media-player state; unknown/idle states get IDLE."""
-    return _BADGE.get(state, ("■ IDLE", False))
+def badge(state: str) -> tuple[str, str]:
+    """(label, badge state) for a media-player state; unknown states read as IDLE.
+    `ui.badge_color` turns the state into a color."""
+    return _BADGE.get(state, ("■ IDLE", BADGE_IDLE))
 
 
 # ---------------------------------------------------------------------------
@@ -500,11 +501,11 @@ class RokuSystem(System):
         if not self.ctl.connected:
             return [[Seg(self._status(), dim=True)]]
         _, media = self.ctl.snapshot()
-        label, dim = badge(media.state)
+        label, state = badge(media.state)
         detail = media.app or self.ctl.device.name or ""
-        # Accent-colored badge (bright for PLAYING/IDLE, dim for PAUSED), mirroring
-        # Router's "● ONLINE" / Lighting's "● CONNECTED".
-        return [[Seg(label, self.color, bold=not dim, dim=dim), Seg("    " + detail)]]
+        # Same badge grammar as Router's "● ONLINE" / Lighting's "● CONNECTED".
+        return [[Seg(label, badge_color(state, self.color), bold=state == BADGE_ACTIVE),
+                 Seg("    " + detail)]]
 
     # -- expanded ----------------------------------------------------------
     def render_expanded(self, region: Region) -> None:
@@ -527,9 +528,9 @@ class RokuSystem(System):
 
     def _render_header(self, region: Region) -> None:
         dev, media = self.ctl.snapshot()
-        # Line 0: status badge (accent color) + what's on, mirroring Router/Lighting.
-        label, dim = badge(media.state)
-        region.text(0, 0, label, self.color, bold=not dim, dim=dim)
+        # Line 0: status badge + what's on, mirroring Router/Lighting.
+        label, state = badge(media.state)
+        region.text(0, 0, label, badge_color(state, self.color), bold=state == BADGE_ACTIVE)
         line = media.app or "Home"
         if media.position and media.duration:
             line += f"   {media.position} / {media.duration}"

@@ -9,6 +9,12 @@ The surface is the curses TUI. Drive it in an isolated tmux and capture
 panes; use `capture-pane -e` when the change is about color/bold/dim
 attributes (dim = SGR `ESC[2m`).
 
+Colours are authored as hex in `ui.PALETTE`, but tmux reports
+`can_change_color() == false`, so every entry snaps to the nearest xterm-256
+cube colour there. A capture shows the *quantised* rendering, not the hex —
+terminals with `init_color` (kitty, iTerm, xterm) show the exact value. Treat
+tmux SGR codes as a floor, and confirm anything subtle in a real terminal.
+
 ## Launch (from any checkout/worktree)
 
 Default to **80×50** — the app is designed with an 80-column aesthetic in

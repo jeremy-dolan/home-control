@@ -26,15 +26,16 @@ with the display for Sonos.  Not sure if aesthetically aligning is good, or
 
 There's also this comment:
 
-def badge(state: str) -> tuple[str, bool]:
-    """(label, dim) for a media-player state; unknown/idle states get IDLE."""
-    return _BADGE.get(state, ("■ IDLE", False))
+def badge(state: str) -> tuple[str, str]:
+    """(label, badge state) for a media-player state; unknown states read as IDLE.
+    `ui.badge_color` turns the state into a color."""
+    return _BADGE.get(state, ("■ IDLE", BADGE_IDLE))
 
 I would be curious to know more about what the 'unknown' states are, that we're
 hiding by using IDLE as a default.
 
-Finally, ■ IDLE should be in grey, not purple, and we should substitute "Roku
-Dynamic Menu" for something less branded and wordy. Maybe "Home"?
+Also should substitute "Roku Dynamic Menu" for something less branded and
+wordy. Maybe "Home"?
 
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
@@ -141,54 +142,47 @@ off-screen. Move `_refresh_active_after`'s `sleep`+re-poll onto the worker too.
 
 ## Unify row-selection styling into shared ui helpers
 
-**Priority:** low · **Scope:** `home_control/ui.py`, all panels (`hue.py`,
-`sonos.py`, `midea.py`, `roku.py`)
+**Priority:** low · **Scope:** `home_control/ui.py`, `roku.py`, `sonos.py`
 
-### Problem
+### Status
 
-Every panel re-implements "this row is selected" styling, and they've drifted,
-so selecting a light, a speaker, and an AC don't guarantee the same look:
+Mostly done. `ui.cursor(accent, sel)` is the single source for the `▶ `/`  `
+cursor, and `ui.highlight(line, accent)` does the whole-row treatment: bold
+every segment, clear dim so the bold reads, and lift any segment carrying the
+accent to `lighten(accent)`. Hue and Sonos route their rows through it; Hue's
+`_highlight` and Sonos's inline bold loop are gone, and neither the brightness
+bar nor the volume bar computes its own `lighten()` any more.
 
-- **Cursor**: `Seg("▶ ", self.color, bold=True) if sel else Seg("  ")` is
-  copy-pasted in ~6 places (Hue `_room_row`/`_light_row`/scene/device rows,
-  Sonos `_zone_row`, Midea).
-- **Whole-row bold**: Hue has a `_highlight()` method (bold every seg, clear
-  dim); Sonos `_zone_row` inlines the same loop; `ui.select_row` bolds only the
-  single string it draws. Three implementations of one idea.
-- **Widget brightening**: the Hue brightness bar and the Sonos volume bar each
-  need an *explicit* `lighten()` on select (bold can't brighten their colours,
-  and on the heavy bar glyphs bold weight barely reads) — computed separately in
-  each file. Meanwhile badge/text colours still lean on the terminal rendering
-  bold as bright, so the brightening story is inconsistent even within one row.
-- **Two incompatible abstractions**: `ui.select_row` draws straight into a
-  Region, so rows built as a `Line` (list of `Seg`) can't use it and roll their
-  own instead.
+The implementation inverted the flag this entry originally proposed. Rather than
+opting widgets *in* with `brighten=True`, `highlight()` lifts everything already
+carrying the accent and segments opt *out* with `Seg(lift=False)` — which the
+cursor uses, so the marker itself stays at the base shade while the row it marks
+brightens.
 
-Any tweak to the selection cue currently has to be made in several places.
+### What's left
 
-### Proposed direction
+- **Two abstractions still.** `ui.select_row` draws straight into a Region
+  (Roku's app list, Sonos's queue and favorites), so plain-text rows and
+  `Line`-built rows take different paths. They share `cursor()` now, but there
+  is no single entry point. Folding `select_row` into a thin wrapper over
+  `highlight()` is the remaining cleanup.
 
-One `Line`-based selection primitive in `ui.py`, e.g.
-`select_line(line, *, selected, accent) -> Line` that:
+### Not doing: identical selection in every panel
 
-- prepends the standard `▶ `/`  ` cursor in the accent colour,
-- applies the whole-row bold + un-dim,
-- brightens marked segments explicitly instead of relying on bold-as-bright —
-  likely via a `Seg` flag (e.g. `brighten=True`) tagging accent-coloured widgets
-  (bars, knobs) so the helper swaps in `lighten(color)` on select. Text keeps
-  bold (its weight reads as selected regardless of terminal).
+The original "done when" asked that selection look identical across panels. That
+is too strong, and Midea is the counterexample — leave it as it is.
 
-`ui.select_row` then becomes a thin wrapper that draws the result; each panel's
-`_*_row` builds a plain `Line` and hands it to the helper. Retire Hue's
-`_highlight` and Sonos's inline bold loop.
+Midea marks selection with the cursor alone; it never calls `highlight()`. Its
+`_dim()` is a *state* cue, not a selection one: an off or unreachable unit is
+dimmed whether or not it is selected (which is why `_card_rows` restores the
+accent cursor over the dimming — an off unit is still selectable, to power it
+back on). Row-bolding a Midea card would collide with that, since dim already
+means "off/unreachable", and the panel shows only ~3 always-expanded 3-line
+cards where a whole bolded card reads as noise rather than focus.
 
-### Done when
-
-- Hue, Sonos, and Midea selectable rows all route through the shared helper; no
-  panel re-implements the cursor or the bold loop.
-- Filled-bar/slider brightening is terminal-independent (explicit lighten) for
-  every panel, consistently.
-- Selection looks identical across panels, modulo each system's accent colour.
+The convention to document instead: **the cursor is the guaranteed selection
+cue in every panel; row-bold + accent lift is an optional reinforcement that
+dense scrolling lists (Hue, Sonos) use and card layouts (Midea) do not.**
 
 ## YouTube Music search + playback in the Sonos panel
 
@@ -310,3 +304,46 @@ ln -s ~/.local/share/home-control/venv/bin/home-control \
 
 however, probably should direct users to make an 'editable' install so it
 can be extended to their devices
+
+## Sync clock option for the Lighting panel
+
+**Priority:** low · **Scope:** `home_control/systems/hue.py` (bridge-info
+sub-mode, `HueController`)
+
+### Problem
+
+The bridge-info view (`b` from the Lighting panel) checks the bridge clock
+against the local one and flags drift over `CLOCK_DRIFT_WARN` (60s) by
+suffixing the "UTC time" and "Local time" rows with " (out of sync?)" in
+`fault` red. That is the right severity — a drifted clock silently misfires
+any schedule the bridge runs — but the panel only reports it. There is no way
+to act on it without leaving the app for the Hue app or the bridge's web UI.
+
+### Proposed direction
+
+A hotkey in the bridge-info sub-mode (the sub-mode has no key of its own yet)
+that pushes the correct time to the bridge, with the usual command treatment:
+run off the main thread, confirm via `set_status`, re-poll the config after.
+
+Needs API research first — do not assume the shape:
+
+- The v1 CLIP API exposes the clock under `PUT /api/<user>/config`, and the
+  drift check already reads `UTC` back from `GET .../config`. Whether that
+  field is writable (versus read-only and NTP-managed) has **not** been
+  verified against the real bridge — check before designing the UI around it.
+- Bridges normally keep time over NTP themselves, so persistent drift may mean
+  the bridge cannot reach an NTP server rather than that its clock needs a
+  nudge. If so, a one-shot "set the time" would silently drift again and the
+  honest fix is to surface *why* (no internet / blocked NTP) instead. The
+  bridge config's `internetservices` block already reports internet
+  reachability and is displayed two rows below the drift warning.
+- If the field turns out to be read-only, the fallback is to drop the action
+  and instead make the warning explain itself in the `?` help.
+
+### Done when
+
+- The drift warning is actionable, or is documented as un-actionable with the
+  reason shown in-panel.
+- Whatever the resolution, the behaviour is covered by a mock-mode test — the
+  fixture bridge clock is fixed at `2026-07-21`, so the drift path is always
+  live under `HOME_CONTROL_MOCK=1`.

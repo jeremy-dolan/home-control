@@ -22,7 +22,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, justify, lighten, pad_between, rgb_color
+from ..ui import (
+    BADGE_ACTIVE,
+    Line,
+    Region,
+    Seg,
+    badge_color,
+    cursor,
+    highlight,
+    hint,
+    hint_row,
+    justify,
+    level_bar,
+    pad_between,
+    rgb_color,
+)
 from .base import System, VoiceAction
 
 BRIDGE_IP = "192.168.1.99"
@@ -140,13 +154,9 @@ def next_bri(current: int, direction: int) -> int | None:
 
 
 def brightness_bar(bri: int, on: bool, color: str = "", width: int = BAR_WIDTH) -> Line:
-    """A ━━━●─── level bar (no brackets): the filled run plus a ● knob at its head in
-    `color`, the remaining track dim. When off, just the dim empty track — the [OFF]
-    tag already carries the state."""
-    if not on:
-        return [Seg("─" * width, dim=True)]
-    f = max(1, min(width, round(bri / 254 * width)))
-    return [Seg("━" * (f - 1) + "◉", color), Seg("─" * (width - f), dim=True)]
+    """The shared `ui.level_bar` over Hue's 0-254 brightness scale. An off light
+    draws the empty track — its ● ON/OFF badge already carries the state."""
+    return level_bar(bri, 254, color, width, empty=not on)
 
 
 # ---------------------------------------------------------------------------
@@ -867,10 +877,11 @@ class HueSystem(System):
         if not self.ctl.connected:
             msg = self.ctl.error or "connecting..."
             return [[Seg(f"{self.ctl.ip}: {msg}", dim=True)]]
-        # Badge mirrors the Router's "● ONLINE": bold accent colour on the left.
+        # Badge mirrors the Router's "● ONLINE": accent colour, bold, on the left.
         badge = "● CONNECTED"
         line = pad_between(badge, self.ctl.summary, width)
-        return [[Seg(badge, self.color, bold=True), Seg(line[len(badge):])]]
+        return [[Seg(badge, badge_color(BADGE_ACTIVE, self.color), bold=True),
+                 Seg(line[len(badge):])]]
 
     # -- expanded ----------------------------------------------------------
     def _build_items(self, rooms: list[Room], lights: dict[int, Light]) -> None:
@@ -891,7 +902,7 @@ class HueSystem(System):
         rooms, lights = self.ctl.snapshot()
         if not self.ctl.connected:
             if self.ctl.error:
-                region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "red", bold=True)
+                region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "fault", bold=True)
                 region.text_wrapped(1, 0, self.ctl.error, dim=True)
             else:
                 region.text(0, 0, f"Connecting to {self.ctl.ip}...", dim=True)
@@ -925,43 +936,33 @@ class HueSystem(System):
             self.scroll = focus - visible + 1
         self.scroll = max(0, min(self.scroll, max(0, total - visible)))
 
-    @staticmethod
-    def _highlight(line: Line) -> Line:
-        """Make a whole row stand out as selected: bold every segment (and clear
-        dim so the bold reads). Mutates and returns the same list."""
-        for s in line:
-            s.bold = True
-            s.dim = False
-        return line
-
     def _room_row(self, room: Room, width: int, *, selected: bool, scenes_suffix: bool = False) -> Line:
         # Selection cue: an accent ▶ cursor + the whole row bolded (no reverse video).
-        cursor = Seg("▶ ", self.color, bold=True) if selected else Seg("  ")
+        cur = cursor(self.color, selected)
         name = f"{room.name} — Scenes" if scenes_suffix else room.name
-        left = [cursor, Seg(name, self.color, bold=True)]
+        left = [cur, Seg(name, self.color, bold=True)]
         right = [] if scenes_suffix else [Seg("←→ bri", self.color, dim=True)]
         line = justify(left, right, width)
-        return self._highlight(line) if selected else line
+        return highlight(line, self.color) if selected else line
 
     def _light_row(self, ls: Light, width: int, *, selected: bool) -> Line:
-        cursor = Seg("▶ ", self.color, bold=True) if selected else Seg("  ")
+        cur = cursor(self.color, selected)
         # Columns: cursor(2) · name(24) · 4-space gap · brightness bar(BAR_WIDTH) ·
         # ● state · … · colour swatch + mode label (right-aligned).
         name = Seg(f"  {ls.name}"[:24].ljust(24))
         if not ls.reachable:
             # "unreachable" floats in the slider's lane; a lone ● sits in the
             # on/off dot column. Both grey, no colour swatch.
-            line = [cursor, name, Seg("    "),
-                    Seg("unreachable".center(BAR_WIDTH), "light_grey"),
-                    Seg("  "), Seg("●", "light_grey")]
-            return self._highlight(line) if selected else line
-        state_color = "green" if ls.on else "red"
-        # Selected rows use a lighter accent for the filled bar (bold alone can't
-        # brighten a custom 256-colour accent).
-        bar_color = lighten(self.color) if selected else self.color
+            line = [cur, name, Seg("    "),
+                    Seg("unreachable".center(BAR_WIDTH), "muted"),
+                    Seg("  "), Seg("●", "muted")]
+            return highlight(line, self.color) if selected else line
+        # On/off is the panel accent vs muted, not green vs red: an off lamp is
+        # an ordinary state, and red made a dim room look like a failure.
+        state_color = self.color if ls.on else "muted"
         left = [
-            cursor, name, Seg("    "),
-            *brightness_bar(ls.brightness, ls.on, bar_color),
+            cur, name, Seg("    "),
+            *brightness_bar(ls.brightness, ls.on, self.color),
             Seg("  "), Seg("● ", state_color), Seg("ON" if ls.on else "OFF", state_color),
         ]
         info = light_color(ls) if ls.on else None
@@ -971,7 +972,7 @@ class HueSystem(System):
             line = justify(left, right, width)
         else:
             line = left
-        return self._highlight(line) if selected else line
+        return highlight(line, self.color) if selected else line
 
     def _composite_rows(self, width: int) -> tuple[list[Line], int]:
         """Room/light rows for the main list, with the active scenes list or
@@ -1014,8 +1015,8 @@ class HueSystem(System):
         rows: list[Line] = []
         for i, sc in enumerate(self.scenes):
             sel = i == self.scene_cursor
-            cursor = Seg("▶ ", self.color, bold=True) if sel else Seg("  ")
-            rows.append([cursor, Seg(f"  {sc.name}", bold=sel)])
+            cur = cursor(self.color, sel)
+            rows.append([cur, Seg(f"  {sc.name}", bold=sel)])
         return rows, self.scene_cursor
 
     # Nests device-dialog rows one level under their light/room row (which
@@ -1032,9 +1033,9 @@ class HueSystem(System):
             sel = i == self.info_cursor
             # Selection cue matches the main list/scenes rows: an accent ▶
             # cursor + bold (default-colour) text, not a solid accent fill.
-            cursor = Seg("▶ ", self.color, bold=True) if sel else Seg("  ")
+            cur = cursor(self.color, sel)
             field = pad_between(fld.name, self._field_value(fld, sel), self._FIELD_WIDTH)
-            rows.append([Seg(self._FIELD_INDENT), cursor, Seg(field, bold=sel)])
+            rows.append([Seg(self._FIELD_INDENT), cur, Seg(field, bold=sel)])
         focus = self.info_cursor + 1  # +1 for the title row above the fields
         for label, val in self.info_read_only:
             rows.append([Seg(f"{self._FIELD_INDENT}{label}: {val}", dim=True)])
@@ -1156,7 +1157,7 @@ class HueSystem(System):
             except ValueError:
                 pass
         badge = " (out of sync?)" if out_of_sync else ""
-        time_style = "warn" if out_of_sync else ""
+        time_style = "alert" if out_of_sync else ""
         kv("UTC time", (utc_str or "?").replace("T", " ") + badge, time_style)
         kv("Local time", cfg.get("localtime", "?").replace("T", " ") + badge, time_style)
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
@@ -1203,9 +1204,11 @@ class HueSystem(System):
             if style == "header":
                 region.text(top + i, 0, text, self.color, bold=True)
             elif style == "unreachable":
-                region.text(top + i, 0, text, "light_grey")
-            elif style == "warn":
-                region.text(top + i, 0, text, "red")
+                region.text(top + i, 0, text, "muted")
+            elif style == "alert":
+                # A drifted bridge clock silently misfires every schedule the
+                # bridge runs, so it earns "fault" red rather than "warn" amber.
+                region.text(top + i, 0, text, "fault")
             else:
                 region.text(top + i, 0, text)
 

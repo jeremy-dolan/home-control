@@ -28,7 +28,23 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, justify, lighten, pad_between, select_row
+from ..ui import (
+    BADGE_ACTIVE,
+    BADGE_IDLE,
+    Line,
+    Region,
+    Seg,
+    badge_color,
+    cursor,
+    highlight,
+    hint,
+    hint_row,
+    justify,
+    level_bar,
+    pad_between,
+    select_row,
+    toggle_dot,
+)
 from .base import Popup, System
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
@@ -105,15 +121,17 @@ class DeviceField:
 # ---------------------------------------------------------------------------
 
 _BADGES = {
-    "PLAYING": ("▶ PLAYING", "yellow"),
-    "PAUSED_PLAYBACK": ("⏸ PAUSED", "grey"),
-    "TRANSITIONING": ("⟳ LOADING", "yellow"),
-    "STOPPED": ("■ STOPPED", "grey"),
+    "PLAYING": ("▶ PLAYING", BADGE_ACTIVE),
+    "PAUSED_PLAYBACK": ("⏸ PAUSED", BADGE_IDLE),
+    "TRANSITIONING": ("⟳ LOADING", BADGE_ACTIVE),
+    "STOPPED": ("■ STOPPED", BADGE_IDLE),
 }
 
 
 def badge(transport_state: str) -> tuple[str, str]:
-    return _BADGES.get(transport_state, ("■ STOPPED", "grey"))
+    """(label, badge state) for a zone; `ui.badge_color` turns the state into a
+    color. A transitioning zone counts as active — it is on its way to playing."""
+    return _BADGES.get(transport_state, ("■ STOPPED", BADGE_IDLE))
 
 
 # Width of the widest badge label ("▶ PLAYING" / "■ STOPPED" / "⟳ LOADING"),
@@ -157,10 +175,8 @@ def trunc(text: str, width: int) -> str:
 
 
 def volume_bar(vol: int, color: str = "", width: int = 12) -> Line:
-    """A ━━━●─── level bar (no brackets): the filled run plus a ● knob at its head in
-    `color`, the remaining track dim."""
-    f = max(1, min(width, round(vol / 100 * width)))
-    return [Seg("━" * (f - 1) + "●", color), Seg("─" * (width - f), dim=True)]
+    """The shared `ui.level_bar` over a 0-100 volume percentage."""
+    return level_bar(vol, 100, color, width)
 
 
 def _balance_to_pct(dev) -> int:
@@ -876,7 +892,8 @@ class SonosSystem(System):
 
     def _grouped_lines(self, zones: list[ZoneState], active_idx: int, width: int) -> list[Line]:
         zone = zones[active_idx]
-        label, color = badge(zone.transport_state)
+        label, state = badge(zone.transport_state)
+        color = badge_color(state, self.color)
         track = zone.track
         detail = ""
         if track and track.title:
@@ -897,7 +914,8 @@ class SonosSystem(System):
     def _independent_row(self, zone: ZoneState, width: int) -> Line:
         """One speaker's status on a single line: state badge, name, now-playing,
         and a right-aligned volume. Song + volume dim when it isn't playing."""
-        label, color = badge(zone.transport_state)
+        label, state = badge(zone.transport_state)
+        color = badge_color(state, self.color)
         playing = zone.transport_state == "PLAYING"
         vol_text = f"vol {zone.volume}"
         track = zone.track
@@ -967,12 +985,9 @@ class SonosSystem(System):
         # Play-mode indicator line. The first letter of each control is its hotkey
         # (s/r/c), highlighted in plain white so the toolbar needn't list them.
         if y < region.height:
-            def mark(on: bool) -> str:
-                return "▣" if on else "▢"
-
             def control(name: str, on: bool) -> Line:
-                return [Seg(name[0], "white", bold=True),
-                        Seg(f"{name[1:]} {mark(on)}", dim=True)]
+                return [Seg(name[0], "", bold=True),
+                        Seg(f"{name[1:]} {toggle_dot(on)}", dim=True)]
             gap = Seg("   ", dim=True)
             region.segs(y, [*control("shuffle", zone.shuffle), gap,
                             *control("repeat", zone.repeat), gap,
@@ -1009,30 +1024,23 @@ class SonosSystem(System):
         if f.kind == "info":
             region.text(row, 20, trunc(str(f.value), region.width - 20), dim=True)
         elif f.kind == "bool":
-            txt = "[ on ]" if f.value else "[off ]"
-            color = "green" if f.value else ""
-            region.text(row, 20, txt, color, bold=sel)
+            color = self.color if f.value else "muted"
+            region.text(row, 20, toggle_dot(bool(f.value)), color, bold=sel)
         elif f.kind == "int":
             txt = _int_slider(int(f.value), f.min_val, f.max_val) + f"  {f.value}{f.unit}"
             region.text(row, 20, trunc(txt, region.width - 20), bold=sel)
 
     def _zone_row(self, zone: ZoneState, active: bool, width: int) -> Line:
-        label, color = badge(zone.transport_state)
+        label, state = badge(zone.transport_state)
+        color = badge_color(state, self.color)
         mute = "M" if zone.muted else " "
         group = "+" if zone.grouped else " "
-        cursor = Seg("▶ ", self.color, bold=True) if active else Seg("  ")
-        # Filled bar: base yellow, brightened to a lighter yellow when selected.
-        # lighten() allocates a real lighter colour pair, so the highlight doesn't
-        # depend on the terminal rendering bold as a bright colour (heavy bar
-        # glyphs barely show bold weight anyway). Same mechanism as Hue's
-        # brightness bar, just yellow instead of the blue accent.
-        bar_color = lighten("yellow") if active else "yellow"
         segs: Line = [
-            cursor,
+            cursor(self.color, active),
             Seg(f"{zone.name:<16}  "),
             Seg(f"{label:<10}", color),
             Seg(f"  {mute}{group}  "),
-            *volume_bar(zone.volume, bar_color),
+            *volume_bar(zone.volume, self.color),
             Seg(f" {zone.volume:>3}%  "),
         ]
         used = sum(len(s.text) for s in segs)
@@ -1040,11 +1048,9 @@ class SonosSystem(System):
         if track and track.title and used < width:
             t = track.title + (f"  —  {track.artist}" if track.artist else "")
             segs.append(Seg(trunc(t, width - used), dim=True))
-        if active:  # selection cue: bold the whole row (no reverse video)
-            for s in segs:
-                s.bold = True
-                s.dim = False
-        return segs
+        # Selection cue: bold the row and lift its accent segments (no reverse
+        # video) — the badge and bar brighten together with the cursor.
+        return highlight(segs, self.color) if active else segs
 
     def _render_queue(self, region: Region) -> None:
         items = self.ctl.queue_items
