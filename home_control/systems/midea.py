@@ -52,7 +52,7 @@ from midealocal.devices.ac import MideaACDevice
 from midealocal.discover import discover as midea_discover
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, justify, wrap
+from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, cursor, hint, hint_row, justify, wrap
 from .base import System, VoiceAction
 
 # Minimum gap between discovery attempts. A failure here can be a cloud-side
@@ -146,22 +146,25 @@ class EditableField:
 
 
 def unit_badge(u: MideaUnit) -> tuple[str, str]:
-    """(badge text, color) for a unit's status dot: colored accent + mode word
-    when actively conditioning, grey "FAN" for fan-only, grey "OFF" for
-    powered off, "????" for unreachable. Deliberately not Router's
-    red-for-offline convention — off/unreachable read as calm grey here,
-    not alarming. The label is padded to 4 chars (the widest: "????",
-    "COOL", "AUTO") so shorter ones ("OFF"/"FAN"/"DRY") don't shift the
-    name column that follows the badge."""
+    """(badge text, badge state) for a unit's status dot: the mode word while it
+    is actively conditioning, "FAN" for fan-only, "OFF" when powered off, "????"
+    when unreachable. `ui.badge_color` turns the state into a color. Fan-only
+    counts as idle: the unit is reachable and running, but not conditioning, and
+    that is the distinction the dot is there to make. An unreachable *unit* is
+    idle rather than a fault — one AC that dropped off the LAN is routine and
+    reads as calm grey, where BADGE_FAULT is reserved for a whole panel's device
+    being unreachable. The label is padded to 4 chars (the widest: "????",
+    "COOL", "AUTO") so shorter ones ("OFF"/"FAN"/"DRY") don't shift the name
+    column that follows the badge."""
     if not u.online:
-        label, color = "????", "light_grey"
+        label, state = "????", BADGE_IDLE
     elif not u.power:
-        label, color = "OFF", "light_grey"
+        label, state = "OFF", BADGE_IDLE
     elif u.mode == "FAN_ONLY":
-        label, color = "FAN", "light_grey"
+        label, state = "FAN", BADGE_IDLE
     else:
-        label, color = _MODE_LABEL.get(u.mode, u.mode), "midea_teal"
-    return f"● {label:<4}", color
+        label, state = _MODE_LABEL.get(u.mode, u.mode), BADGE_ACTIVE
+    return f"● {label:<4}", state
 
 
 def _c_to_f(c: float) -> float:
@@ -659,8 +662,9 @@ class MideaSystem(System):
         return [self._unit_row(u, width) for u in units]
 
     def _unit_row(self, u: MideaUnit, width: int) -> Line:
-        label, color = unit_badge(u)
-        left = [Seg(label, color, bold=(color == "midea_teal")), Seg(f"  {u.name}")]
+        label, state = unit_badge(u)
+        color = badge_color(state, self.color)
+        left = [Seg(label, color, bold=(state == BADGE_ACTIVE)), Seg(f"  {u.name}")]
         if not u.online or not u.power:
             return left
         cur = _fmt_temp(u.indoor_temp_c, u.fahrenheit)
@@ -721,20 +725,21 @@ class MideaSystem(System):
         return [Seg(s.text, "", dim=True) for s in line]
 
     def _header_row(self, u: MideaUnit, is_selected: bool, width: int) -> Line:
-        label, color = unit_badge(u)
-        cursor = Seg("▶ ", self.color, bold=True) if is_selected else Seg("  ")
+        label, state = unit_badge(u)
+        color = badge_color(state, self.color)
+        cur = cursor(self.color, is_selected)
         if not u.online:
             # "connecting…" while we've never reached it; "unreachable" only
             # once we had it and lost contact (so the card's dimmed values are
             # real last-known state, not defaults).
             status = "unreachable" if u.contacted else "connecting..."
-            return [cursor, Seg(label, color), Seg(f"  {u.name} ({status})")]
-        left: Line = [cursor, Seg(label, color, bold=(color == "midea_teal")), Seg(f"  {u.name}")]
+            return [cur, Seg(label, color), Seg(f"  {u.name} ({status})")]
+        left: Line = [cur, Seg(label, color, bold=(state == BADGE_ACTIVE)), Seg(f"  {u.name}")]
         right: Line = []
         if u.filter_alert:
-            right.append(Seg("filter!  ", "yellow"))
+            right.append(Seg("filter!  ", "warn"))
         if u.error_code:
-            right.append(Seg(f"err {u.error_code}  ", "yellow"))
+            right.append(Seg(f"err {u.error_code}  ", "warn"))
         if self._num_buf is not None and is_selected:
             tgt_text = f"{self._num_buf}_"
         else:

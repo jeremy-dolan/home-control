@@ -74,7 +74,7 @@ class System(ABC):
     def color(self) -> str:
         from ..ui import SYSTEM_COLORS
 
-        return SYSTEM_COLORS.get(self.color_key or self.name.lower(), "white")
+        return SYSTEM_COLORS.get(self.color_key or self.name.lower(), "")
 
     # Transient status (action confirmations shown on the global status line) --
     _status_msg: str = ""

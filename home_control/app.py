@@ -197,7 +197,7 @@ class Shell:
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
         mode, buffer, message, _is_error = self.voice.snapshot()
-        color = "cyan"
+        color = "info"
         mid = VOICE_BODY_LINES // 2
         # Static sample phrases, shown while the dialogue is still waiting for
         # a command so the user sees what's possible without asking the model.

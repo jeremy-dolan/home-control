@@ -4,6 +4,7 @@ import curses
 
 import pytest
 
+from home_control import ui
 from home_control.systems import midea
 
 # --- temperature conversion ----------------------------------------------------
@@ -33,32 +34,33 @@ def _unit(**kw: object) -> midea.MideaUnit:
 
 def test_unit_badge_cooling():
     u = _unit(power=True, mode="COOL")
-    assert midea.unit_badge(u) == ("● COOL", "midea_teal")
+    assert midea.unit_badge(u) == ("● COOL", ui.BADGE_ACTIVE)
 
 
 def test_unit_badge_dry_and_auto():
     # DRY is padded to 4 so it aligns with the wider labels (COOL/????).
-    assert midea.unit_badge(_unit(power=True, mode="DRY")) == ("● DRY ", "midea_teal")
-    assert midea.unit_badge(_unit(power=True, mode="AUTO")) == ("● AUTO", "midea_teal")
+    assert midea.unit_badge(_unit(power=True, mode="DRY")) == ("● DRY ", ui.BADGE_ACTIVE)
+    assert midea.unit_badge(_unit(power=True, mode="AUTO")) == ("● AUTO", ui.BADGE_ACTIVE)
 
 
 def test_unit_badge_fan_only():
     u = _unit(power=True, mode="FAN_ONLY")
-    assert midea.unit_badge(u) == ("● FAN ", "light_grey")
+    assert midea.unit_badge(u) == ("● FAN ", ui.BADGE_IDLE)
 
 
 def test_unit_badge_off():
     u = _unit(power=False)
-    label, color = midea.unit_badge(u)
+    label, state = midea.unit_badge(u)
     assert label == "● OFF "
-    assert color == "light_grey"
+    assert state == ui.BADGE_IDLE
 
 
 def test_unit_badge_unreachable():
     u = _unit(online=False)
-    label, color = midea.unit_badge(u)
+    # An unreachable *unit* is idle, not a fault — see unit_badge()'s docstring.
+    label, state = midea.unit_badge(u)
     assert label == "● ????"
-    assert color == "light_grey"
+    assert state == ui.BADGE_IDLE
 
 
 def test_unit_badge_labels_share_width():

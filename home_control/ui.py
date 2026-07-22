@@ -7,6 +7,7 @@ systems/. Keeping curses confined here keeps the rest of the app headless-testab
 
 from __future__ import annotations
 
+import colorsys
 import curses
 import textwrap
 from dataclasses import dataclass
@@ -30,50 +31,36 @@ def wrap(text: str, width: int, max_lines: int | None = None) -> list[str]:
 # Colors
 # ---------------------------------------------------------------------------
 
-# Named foreground colors on the terminal's default background. Each becomes a
-# curses color pair after init_colors() runs. "grey" is white + A_DIM since the
-# 8-color ANSI palette has no true grey. These stay as base ANSI colors and are
-# used for status text (green=playing/on, red=off, yellow=paused, etc.).
-_COLOR_FG = {
-    "white": curses.COLOR_WHITE,
-    "green": curses.COLOR_GREEN,
-    "blue": curses.COLOR_BLUE,
-    "magenta": curses.COLOR_MAGENTA,
-    "cyan": curses.COLOR_CYAN,
-    "yellow": curses.COLOR_YELLOW,
-    "red": curses.COLOR_RED,
-}
+# The app targets a 256-color terminal. Every palette entry is authored as RGB
+# hex and resolved at init to an exact color (init_color, where the terminal
+# allows redefining slots) or the nearest xterm-256 cube color. Below 256 colors
+# the palette is left unallocated and every name renders in the terminal's
+# default foreground: there is deliberately no hand-tuned 8-color variant, since
+# layout, bold/dim weight, cursors and badge glyphs already carry the UI without
+# hue. See "UI conventions" in ARCHITECTURE.md.
+PALETTE = {
+    # -- Semantic roles: what a color *means*, in any panel. ----------------
+    "warn":  "#E3B341",  # working, but wants attention (filter due, error code)
+    "fault": "#F85149",  # unreachable, offline, failed
+    "muted": "#8A8A8A",  # a value that is itself off/absent/inactive
+    "info":  "#39C5CF",  # neutral secondary series (voice chrome, upload chart)
 
-# Custom accent colors given as exact RGB hex. Resolved at init to the best the
-# terminal supports: exact (init_color) → nearest xterm-256 → ANSI fallback.
-_HEX_COLORS = {
+    # -- System accents: which panel this is. -------------------------------
+    # Each is the panel's *base* shade; lighten() derives the brighter one used
+    # for hotkeys and selected rows, so a base near the top of its hue's range
+    # leaves no room for that and makes the two read as one colour.
+    "router_green": "#19A450",  # deep emerald — lighten()s to #58E690
     "hue_blue":     "#33AAFF",  # bright daylight blue
     "roku_purple":  "#A855F7",  # bright violet — reads well on a black terminal
     "sonos_yellow": "#FFE24D",  # bright warm yellow
     "yoto_orange":  "#FF8C42",  # warm amber/orange
     "midea_teal":   "#14B8A6",  # cool teal (kept clear of the bright blue)
-    "light_grey":   "#808080",  # readable mid grey (true grey, not dim white)
-}
-# Approximate RGB for the base ANSI colors, so accents named by ANSI (e.g. the
-# Router's "green") can also be lightened.
-_ANSI_RGB = {
-    "white": (229, 229, 229), "green": (0, 205, 0), "blue": (0, 0, 238),
-    "magenta": (205, 0, 205), "cyan": (0, 205, 205), "yellow": (205, 205, 0),
-    "red": (205, 0, 0),
-}
-# Fallback ANSI name when the terminal can't render the hex color.
-_HEX_FALLBACK = {
-    "hue_blue": "blue",
-    "roku_purple": "magenta",
-    "sonos_yellow": "yellow",
-    "yoto_orange": "yellow",
-    "midea_teal": "cyan",
-    "light_grey": "white",
 }
 
-# Per-system accent colors (used for borders + highlights; body text stays white).
+# Per-system accent colors (borders, cursors, hotkeys, section headers, bars;
+# body text stays the terminal default).
 SYSTEM_COLORS = {
-    "router": "green",
+    "router": "router_green",
     "hue": "hue_blue",
     "roku": "roku_purple",
     "sonos": "sonos_yellow",
@@ -82,7 +69,6 @@ SYSTEM_COLORS = {
 }
 
 _PAIRS: dict[str, int] = {}
-_DIM: set[str] = set()
 _next_pair = 1  # next free curses pair slot; set at the end of init_colors()
 _dynamic_names: set[str] = set()  # lazily-allocated RGB pairs, cleared on re-init
 
@@ -103,54 +89,47 @@ def _nearest_256(r: int, g: int, b: int) -> int:
 
 
 def init_colors() -> None:
-    """Allocate one color pair per named color. Call once after curses init."""
+    """Allocate one curses pair per palette entry. Call once after curses init.
+
+    On a terminal with fewer than 256 colors nothing is allocated, so every name
+    falls through to the default foreground in `attr()`.
+    """
+    global _next_pair
     curses.start_color()
     curses.use_default_colors()
-    pair = 1
-    for name, fg in _COLOR_FG.items():
-        curses.init_pair(pair, fg, -1)
-        _PAIRS[name] = pair
-        pair += 1
-    # "grey" renders as dim white.
-    _PAIRS["grey"] = _PAIRS["white"]
-    _DIM.add("grey")
+    _PAIRS.clear()
     _PAIRS[""] = 0  # default terminal color
+    _dynamic_names.clear()
+    _next_pair = 1
 
-    # Resolve the custom hex accent colors.
     n_colors = getattr(curses, "COLORS", 0)
+    if n_colors < 256:
+        return
     try:
         can_change = curses.can_change_color()
     except curses.error:
         can_change = False
+
+    pair = 1
     custom_slot = 16  # leave the 16 base ANSI slots untouched
-    for name, hexv in _HEX_COLORS.items():
+    for name, hexv in PALETTE.items():
         r, g, b = _hex_rgb(hexv)
-        fg: int | None = None
+        fg = _nearest_256(r, g, b)
         if can_change and 16 <= custom_slot < n_colors:
             try:
                 curses.init_color(custom_slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
                 fg = custom_slot
                 custom_slot += 1
             except curses.error:
-                fg = None
-        if fg is None and n_colors >= 256:
-            fg = _nearest_256(r, g, b)
-        if fg is None:
-            _PAIRS[name] = _PAIRS.get(_HEX_FALLBACK[name], 0)
-            continue
+                pass
         try:
             curses.init_pair(pair, fg, -1)
-            _PAIRS[name] = pair
-            pair += 1
         except curses.error:
-            _PAIRS[name] = _PAIRS.get(_HEX_FALLBACK[name], 0)
+            continue  # out of pair slots: this name renders in the default color
+        _PAIRS[name] = pair
+        pair += 1
 
-    # Drop any dynamic RGB pairs from a previous init; they re-register lazily
-    # against the freshly allocated pair numbers. Record where free slots begin.
-    global _next_pair
-    for nm in _dynamic_names:
-        _PAIRS.pop(nm, None)
-    _dynamic_names.clear()
+    # Dynamic RGB pairs (rgb_color) re-register lazily above the fixed palette.
     _next_pair = pair
 
 
@@ -159,45 +138,63 @@ def rgb_color(r: int, g: int, b: int) -> str:
 
     The triple is mapped to the nearest xterm-256 cube color and a curses pair is
     allocated for it on first use (cached, so repeated colors share one pair).
-    Falls back to ``"white"`` when the terminal lacks 256 colors or pair slots run
-    out. Must be called after init_colors() (i.e. during rendering)."""
+    Falls back to the default foreground when the terminal lacks 256 colors or
+    pair slots run out. Must be called after init_colors() (i.e. during
+    rendering)."""
     global _next_pair
     if getattr(curses, "COLORS", 0) < 256:
-        return "white"
+        return ""
     idx = _nearest_256(r, g, b)
     name = f"x256:{idx}"
     if name in _PAIRS:
         return name
     if _next_pair >= getattr(curses, "COLOR_PAIRS", 256):
-        return "white"
+        return ""
     try:
         curses.init_pair(_next_pair, idx, -1)
     except curses.error:
-        return "white"
+        return ""
     _PAIRS[name] = _next_pair
     _dynamic_names.add(name)
     _next_pair += 1
     return name
 
 
-def _color_rgb(color: str) -> tuple[int, int, int] | None:
-    """RGB for a named color (custom hex accent or base ANSI), or None."""
-    if color in _HEX_COLORS:
-        return _hex_rgb(_HEX_COLORS[color])
-    return _ANSI_RGB.get(color)
-
-
 def lighten(color: str, t: float = 0.4) -> str:
-    """Return a Seg/attr color name for ``color`` blended ``t`` of the way toward
-    white — a brighter shade of the same hue, allocated as a true-color pair.
-    Used to make a selected row's accent (e.g. the brightness bar) pop, since
-    A_BOLD only brightens the base ANSI colors, not custom 256-color accents.
-    Falls back to the original name when the RGB can't be resolved."""
-    rgb = _color_rgb(color)
-    if rgb is None:
+    """Return a Seg/attr color name for ``color`` raised ``t`` of the way toward
+    full lightness — a brighter shade of the same hue, allocated as its own pair.
+    Used to make hotkeys and a selected row's accent (e.g. the brightness bar)
+    pop, since A_BOLD does not brighten a 256-color pair the way it does the base
+    ANSI colors. Falls back to the original name for anything outside the palette.
+
+    The lift happens in HSL, holding hue and saturation. Blending toward white
+    instead would desaturate: for an already-saturated accent that yields a paler
+    colour rather than a brighter one, leaving the two shades hard to tell apart.
+    """
+    if color not in PALETTE:
         return color
-    r, g, b = (round(c + (255 - c) * t) for c in rgb)
-    return rgb_color(r, g, b)
+    r, g, b = (c / 255 for c in _hex_rgb(PALETTE[color]))
+    h, lum, s = colorsys.rgb_to_hls(r, g, b)
+    r, g, b = colorsys.hls_to_rgb(h, lum + (1 - lum) * t, s)
+    return rgb_color(round(r * 255), round(g * 255), round(b * 255))
+
+
+# Status-badge states. Every panel leads its collapsed line (and its expanded
+# header) with a `● ONLINE` / `▶ PLAYING` / `● COOL` badge; these are the three
+# states such a badge can be in, so the same situation reads the same color in
+# every panel.
+BADGE_ACTIVE = "active"  # doing its job: online, playing, conditioning
+BADGE_IDLE = "idle"      # reachable but not doing anything: off, stopped, paused
+BADGE_FAULT = "fault"    # unreachable or failed
+
+
+def badge_color(state: str, accent: str) -> str:
+    """Color for a status badge in `state` on a panel whose accent is `accent`.
+
+    Active badges carry the system accent (the panel's identity is loudest when
+    the device is doing something), idle ones go `muted`, faults go `fault`.
+    """
+    return {BADGE_ACTIVE: accent, BADGE_IDLE: "muted"}.get(state, "fault")
 
 
 def attr(color: str = "", *, bold: bool = False, dim: bool = False, reverse: bool = False) -> int:
@@ -205,7 +202,7 @@ def attr(color: str = "", *, bold: bool = False, dim: bool = False, reverse: boo
     a = curses.color_pair(_PAIRS.get(color, 0))
     if bold:
         a |= curses.A_BOLD
-    if dim or color in _DIM:
+    if dim:
         a |= curses.A_DIM
     if reverse:
         a |= curses.A_REVERSE
@@ -368,12 +365,21 @@ class Region:
         self.text(row, 0, ch * self.width, color)
 
 
+def cursor(accent: str, sel: bool) -> Seg:
+    """The leading two columns of a selectable row: an accent ▶ when selected, two
+    blanks otherwise. The app never uses reverse video to mark a selection — the
+    cursor plus bolding the row does that job (see "UI conventions" in
+    ARCHITECTURE.md), so every list builds its rows starting with this Seg."""
+    return Seg("▶ ", accent, bold=True) if sel else Seg("  ")
+
+
 def select_row(region: Region, row: int, text: str, *, sel: bool, accent: str,
                col: int = 0) -> None:
-    """Draw a selectable list row. Replaces reverse-video selection with an accent ▶
-    cursor + bold text when selected (a blank cursor + normal text otherwise). ``text``
-    must not include its own cursor/marker — this owns the leading two columns."""
-    region.text(row, col, "▶ " if sel else "  ", accent if sel else "", bold=sel)
+    """Draw a plain-text selectable list row: `cursor()` + the text, bolded when
+    selected. ``text`` must not include its own marker — this owns the leading two
+    columns. Lists that need styled runs build them from `cursor()` directly."""
+    c = cursor(accent, sel)
+    region.text(row, col, c.text, c.color, bold=c.bold)
     region.text(row, col + 2, text, bold=sel)
 
 

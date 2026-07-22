@@ -3,6 +3,7 @@
 import threading
 from types import SimpleNamespace
 
+from home_control import ui
 from home_control.systems import hue, roku, sonos
 
 # --- Hue ---------------------------------------------------------------------
@@ -58,9 +59,12 @@ def test_int_slider_has_dot_and_centre_tick():
 
 
 def test_sonos_badge():
-    assert sonos.badge("PLAYING") == ("▶ PLAYING", "yellow")
-    assert sonos.badge("PAUSED_PLAYBACK") == ("⏸ PAUSED", "grey")
-    assert sonos.badge("STOPPED") == ("■ STOPPED", "grey")
+    # badge() returns a shared badge *state*; ui.badge_color maps it to a colour.
+    assert sonos.badge("PLAYING") == ("▶ PLAYING", ui.BADGE_ACTIVE)
+    assert sonos.badge("TRANSITIONING") == ("⟳ LOADING", ui.BADGE_ACTIVE)
+    assert sonos.badge("PAUSED_PLAYBACK") == ("⏸ PAUSED", ui.BADGE_IDLE)
+    assert sonos.badge("STOPPED") == ("■ STOPPED", ui.BADGE_IDLE)
+    assert sonos.badge("NONSENSE") == ("■ STOPPED", ui.BADGE_IDLE)
 
 
 def test_sonos_trunc():
@@ -197,9 +201,9 @@ def test_fmt_ms():
 
 
 def test_roku_badge():
-    assert roku.badge("play") == ("▶ PLAYING", False)   # bright accent
-    assert roku.badge("pause") == ("⏸ PAUSED", True)    # dimmed accent
-    assert roku.badge("close") == ("■ IDLE", False)
+    assert roku.badge("play") == ("▶ PLAYING", ui.BADGE_ACTIVE)
+    assert roku.badge("pause") == ("⏸ PAUSED", ui.BADGE_IDLE)
+    assert roku.badge("close") == ("■ IDLE", ui.BADGE_IDLE)
 
 
 def _mock_roku(monkeypatch):

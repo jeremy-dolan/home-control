@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, justify, pad_between
+from ..ui import BADGE_ACTIVE, BADGE_FAULT, Line, Region, Seg, badge_color, hint, hint_row, justify, pad_between
 from .base import System
 
 HTTP_TIMEOUT = 3        # seconds for SOAP / descriptor fetches
@@ -229,7 +229,7 @@ def _overlay_readout(cells: list[_Cell], text: str, color: str, col: int = 1) ->
         j = col + i
         if j >= len(out):
             break
-        out[j] = (ch, color if i == 0 else "white")
+        out[j] = (ch, color if i == 0 else "")
     return out
 
 
@@ -1182,8 +1182,8 @@ class RouterSystem(System):
     poll_interval_focused = 2.0
     poll_interval_idle = 5.0
 
-    DOWN_COLOR = "green"  # download throughput chart (top, grows up)
-    UP_COLOR = "cyan"     # upload throughput chart (bottom, grows up)
+    DOWN_COLOR = "router_green"  # download throughput chart (top, grows up)
+    UP_COLOR = "info"    # upload throughput chart (bottom, grows up)
     MAX_CHART_H = 10      # stacked-chart height (download 4 + base + upload 4 + base)
 
     def __init__(self):
@@ -1199,7 +1199,7 @@ class RouterSystem(System):
         if not s.online and not s.connected:
             return [[Seg(s.error or "checking connection...", dim=True)]]
         badge = "● ONLINE" if s.online else "● OFFLINE"
-        color = "green" if s.online else "red"
+        color = badge_color(BADGE_ACTIVE if s.online else BADGE_FAULT, self.color)
         # Order mirrors the expanded view: WAN IP · latency · throughput · devices.
         bits: list[str] = []
         if s.external_ip:
@@ -1235,7 +1235,8 @@ class RouterSystem(System):
         # Line 0: status badge + uptime (left) · public IP (right). The badge sits on
         # the top line so it doesn't move when the panel expands from its collapsed form.
         badge = "● ONLINE" if s.online else "● OFFLINE"
-        left: Line = [Seg(badge, "green" if s.online else "red", bold=True)]
+        left: Line = [Seg(badge, badge_color(BADGE_ACTIVE if s.online else BADGE_FAULT, self.color),
+                          bold=True)]
         extra = []
         if s.status and s.status.lower() != "connected":
             extra.append(s.status)
@@ -1346,12 +1347,9 @@ class RouterSystem(System):
             region.text(h - 1, 0, hint, dim=True)
 
     def _toolbar_hints(self) -> Line:
-        # key_color pins the hotkeys to the exact accent the section headers use
-        # (e.g. "Devices on LAN") rather than the paler auto-lightened tint —
-        # green needs the extra saturation to read as highlighted.
         return hint_row(
-            hint("↕", "scroll", self.color, key_color=self.color),
-            hint("r", "refresh devices", self.color, paren=True, key_color=self.color),
+            hint("↕", "scroll", self.color),
+            hint("r", "refresh devices", self.color, paren=True),
         )
 
     def toolbar_line(self) -> Line:

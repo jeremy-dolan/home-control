@@ -28,7 +28,21 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
-from ..ui import Line, Region, Seg, hint, hint_row, justify, lighten, pad_between, select_row
+from ..ui import (
+    BADGE_ACTIVE,
+    BADGE_IDLE,
+    Line,
+    Region,
+    Seg,
+    badge_color,
+    cursor,
+    hint,
+    hint_row,
+    justify,
+    lighten,
+    pad_between,
+    select_row,
+)
 from .base import Popup, System
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
@@ -105,15 +119,17 @@ class DeviceField:
 # ---------------------------------------------------------------------------
 
 _BADGES = {
-    "PLAYING": ("▶ PLAYING", "yellow"),
-    "PAUSED_PLAYBACK": ("⏸ PAUSED", "grey"),
-    "TRANSITIONING": ("⟳ LOADING", "yellow"),
-    "STOPPED": ("■ STOPPED", "grey"),
+    "PLAYING": ("▶ PLAYING", BADGE_ACTIVE),
+    "PAUSED_PLAYBACK": ("⏸ PAUSED", BADGE_IDLE),
+    "TRANSITIONING": ("⟳ LOADING", BADGE_ACTIVE),
+    "STOPPED": ("■ STOPPED", BADGE_IDLE),
 }
 
 
 def badge(transport_state: str) -> tuple[str, str]:
-    return _BADGES.get(transport_state, ("■ STOPPED", "grey"))
+    """(label, badge state) for a zone; `ui.badge_color` turns the state into a
+    color. A transitioning zone counts as active — it is on its way to playing."""
+    return _BADGES.get(transport_state, ("■ STOPPED", BADGE_IDLE))
 
 
 # Width of the widest badge label ("▶ PLAYING" / "■ STOPPED" / "⟳ LOADING"),
@@ -876,7 +892,8 @@ class SonosSystem(System):
 
     def _grouped_lines(self, zones: list[ZoneState], active_idx: int, width: int) -> list[Line]:
         zone = zones[active_idx]
-        label, color = badge(zone.transport_state)
+        label, state = badge(zone.transport_state)
+        color = badge_color(state, self.color)
         track = zone.track
         detail = ""
         if track and track.title:
@@ -897,7 +914,8 @@ class SonosSystem(System):
     def _independent_row(self, zone: ZoneState, width: int) -> Line:
         """One speaker's status on a single line: state badge, name, now-playing,
         and a right-aligned volume. Song + volume dim when it isn't playing."""
-        label, color = badge(zone.transport_state)
+        label, state = badge(zone.transport_state)
+        color = badge_color(state, self.color)
         playing = zone.transport_state == "PLAYING"
         vol_text = f"vol {zone.volume}"
         track = zone.track
@@ -971,7 +989,7 @@ class SonosSystem(System):
                 return "▣" if on else "▢"
 
             def control(name: str, on: bool) -> Line:
-                return [Seg(name[0], "white", bold=True),
+                return [Seg(name[0], "", bold=True),
                         Seg(f"{name[1:]} {mark(on)}", dim=True)]
             gap = Seg("   ", dim=True)
             region.segs(y, [*control("shuffle", zone.shuffle), gap,
@@ -1010,25 +1028,24 @@ class SonosSystem(System):
             region.text(row, 20, trunc(str(f.value), region.width - 20), dim=True)
         elif f.kind == "bool":
             txt = "[ on ]" if f.value else "[off ]"
-            color = "green" if f.value else ""
+            color = self.color if f.value else "muted"
             region.text(row, 20, txt, color, bold=sel)
         elif f.kind == "int":
             txt = _int_slider(int(f.value), f.min_val, f.max_val) + f"  {f.value}{f.unit}"
             region.text(row, 20, trunc(txt, region.width - 20), bold=sel)
 
     def _zone_row(self, zone: ZoneState, active: bool, width: int) -> Line:
-        label, color = badge(zone.transport_state)
+        label, state = badge(zone.transport_state)
+        color = badge_color(state, self.color)
         mute = "M" if zone.muted else " "
         group = "+" if zone.grouped else " "
-        cursor = Seg("▶ ", self.color, bold=True) if active else Seg("  ")
-        # Filled bar: base yellow, brightened to a lighter yellow when selected.
-        # lighten() allocates a real lighter colour pair, so the highlight doesn't
-        # depend on the terminal rendering bold as a bright colour (heavy bar
-        # glyphs barely show bold weight anyway). Same mechanism as Hue's
-        # brightness bar, just yellow instead of the blue accent.
-        bar_color = lighten("yellow") if active else "yellow"
+        # Filled bar: the accent, brightened when selected. lighten() allocates a
+        # real lighter colour pair, so the highlight doesn't depend on the terminal
+        # rendering bold as a bright colour (heavy bar glyphs barely show bold
+        # weight anyway). Same mechanism as Hue's brightness bar.
+        bar_color = lighten(self.color) if active else self.color
         segs: Line = [
-            cursor,
+            cursor(self.color, active),
             Seg(f"{zone.name:<16}  "),
             Seg(f"{label:<10}", color),
             Seg(f"  {mute}{group}  "),
