@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import os
 import threading
+import tomllib
 from pathlib import Path
 from typing import Any
-
-import tomllib
 
 CONFIG_PATH = Path(
     os.environ.get("HOME_CONTROL_CONFIG", Path.home() / ".config" / "home-control" / "config.toml")
