@@ -258,6 +258,47 @@ def test_pinned_discover_probes_when_metadata_missing(monkeypatch):
     assert probed == ["10.0.0.9"]
 
 
+class _FakeConnected:
+    """Stands in for a freshly connected midealocal device."""
+
+    device_id = 123
+    name = "Den"
+    available = True
+    daemon = False
+    attributes: dict = {}
+    capabilities = {"cool_mode": True, "auto_mode": True, "eco": True}
+    _unsupported_protocol = ["MessageQueryAppliance"]
+
+    def open(self):
+        pass
+
+    def refresh_status(self, check_protocol=False):
+        pass
+
+
+def test_protocol_probe_result_is_never_cached(monkeypatch):
+    # midealocal learns _unsupported_protocol by timing out a query, so it
+    # holds false negatives whenever a unit was merely slow or busy. Caching
+    # it made one bad pass permanent — every card collapsed to Fan/Auto once
+    # the capabilities query landed in that list. Only positive discovery
+    # metadata may be persisted.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: _FakeConnected())
+    ctl._discover_all()
+    assert "unsupported" not in ctl._token_cache["123"]
+    assert ctl._token_cache["123"]["port"] == 6444  # metadata still cached
+
+
+def test_cached_metadata_carries_no_probe_seed(monkeypatch):
+    ctl = _pinned_controller(
+        monkeypatch,
+        [{"ip": "10.0.0.9", "name": "Den"}],
+        {"123": {**_CACHED_ENTRY, "unsupported": ["MessageCapabilitiesQuery"]}},
+    )
+    assert "_unsupported" not in ctl._discover_raw()[123]
+
+
 def test_stale_cached_metadata_dropped_on_connect_failure(monkeypatch):
     ctl = _pinned_controller(
         monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}], {"123": dict(_CACHED_ENTRY)}
@@ -381,44 +422,6 @@ def test_unit_from_device_offline_and_off():
     assert u.swing_mode == "OFF"
 
 
-class _FakeConnected:
-    """Stands in for a freshly connected midealocal device."""
-
-    device_id = 123
-    name = "Den"
-    available = True
-    daemon = False
-    attributes: dict = {}
-    capabilities = {"cool_mode": True, "auto_mode": True, "eco": True}
-    _unsupported_protocol = ["MessageQueryAppliance"]
-
-    def open(self):
-        pass
-
-
-def test_protocol_probe_result_is_never_cached(monkeypatch):
-    # midealocal learns _unsupported_protocol by timing out a query, so it
-    # holds false negatives whenever a unit was merely slow or busy. Caching
-    # it made one bad pass permanent — every card collapsed to Fan/Auto once
-    # the capabilities query landed in that list. Only positive discovery
-    # metadata may be persisted.
-    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
-                             {"123": dict(_CACHED_ENTRY)})
-    monkeypatch.setattr(ctl, "_try_connect", lambda *a: _FakeConnected())
-    ctl._discover_all()
-    assert "unsupported" not in ctl._token_cache["123"]
-    assert ctl._token_cache["123"]["port"] == 6444  # metadata still cached
-
-
-def test_cached_metadata_carries_no_probe_seed(monkeypatch):
-    ctl = _pinned_controller(
-        monkeypatch,
-        [{"ip": "10.0.0.9", "name": "Den"}],
-        {"123": {**_CACHED_ENTRY, "unsupported": ["MessageCapabilitiesQuery"]}},
-    )
-    assert "_unsupported" not in ctl._discover_raw()[123]
-
-
 # --- setpoint encoding ------------------------------------------------------
 
 
@@ -489,3 +492,53 @@ def test_pinned_card_never_falls_back_to_discovering(monkeypatch):
     assert len(units) == 1, "a connecting unit must still occupy a card"
     u = next(iter(units.values()))
     assert u.name == "Den" and not u.contacted   # renders "connecting...", not "Discovering..."
+
+
+def test_poll_cadence_speeds_up_until_the_whole_picture_lands(monkeypatch):
+    # Midea renders last in the panel order, so it starts unfocused at a 5s
+    # cadence. A unit's picture arrives in three waves — status, capabilities,
+    # then the follow-up burst — and each is invisible until a poll tick reads
+    # it. Gating on status alone left the Mode/Fan rows blank for a full tick
+    # after the header appeared.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+    s = midea.MideaSystem()
+    s.ctl = ctl
+    assert s.poll_interval_idle == 5.0          # nothing connected yet
+
+    class _Connecting(_FakeConnected):
+        attributes = {"mode": 0}                # connected, no status reply yet
+        capabilities: dict = {}
+
+    dev = _Connecting()
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: dev)
+    ctl.poll(focused=False)
+    assert ctl.settling and s.poll_interval_idle == midea.SETTLE_POLL_INTERVAL
+
+    dev.attributes = {"mode": 2}                # wave 1: status
+    assert ctl.settling, "capabilities still outstanding"
+    assert s.poll_interval_idle == midea.SETTLE_POLL_INTERVAL
+
+    ctl.poll(focused=False)                     # _fill_in fires now status is in
+    dev.capabilities = {"cool_mode": True}      # wave 2: capabilities
+    assert ctl.settling, "follow-up burst still has FILL_GRACE to land"
+
+    ctl._filled[123] -= midea.FILL_GRACE        # wave 3: grace elapsed
+    assert not ctl.settling
+    assert s.poll_interval_idle == 5.0
+    assert s.poll_interval_focused == 1.0
+
+
+def test_settle_window_caps_the_fast_cadence(monkeypatch):
+    # A unit that never answers must not hold the fast cadence forever.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+
+    class _Silent(_FakeConnected):
+        attributes = {"mode": 0}
+
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: _Silent())
+    ctl.poll(focused=False)
+    assert ctl.settling
+    ctl._settle_deadline -= midea.SETTLE_WINDOW + 1     # pretend the window elapsed
+    assert not ctl.settling

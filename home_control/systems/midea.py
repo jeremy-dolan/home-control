@@ -81,6 +81,22 @@ DISCOVERY_RETRY_INTERVAL = 60
 # every whole °F maps to its own half-degree, round-tripping exactly.
 TEMP_STEP_C = 0.5
 
+# A freshly connected unit's first status reply lands on the device's own
+# thread a fraction of a second after we ask for it — but it only reaches the
+# panel when a poll tick re-reads it, and Midea sits last in the panel order,
+# so at startup that tick is poll_interval_idle (5s) away. Poll fast while any
+# connected unit is still waiting for that first reply, then drop back to the
+# normal cadence. SETTLE_WINDOW caps it so a unit that never answers can't
+# hold the fast cadence forever.
+SETTLE_POLL_INTERVAL = 0.2
+SETTLE_WINDOW = 15.0
+# A unit's picture arrives in three waves — status, then B5 capabilities, then
+# the follow-up queries (_fill_in) carrying screen_display/error_code. Each
+# wave is useless until a poll tick reads it, so the fast cadence has to
+# outlast the last one, not just the first. There's no ack to wait on for the
+# follow-up burst, so hold the fast cadence briefly after sending it.
+FILL_GRACE = 1.5
+
 TOKEN_CACHE_PATH = Path(
     os.environ.get("HOME_CONTROL_MIDEA_CACHE")
     or (Path.home() / ".cache" / "home-control" / "midea_tokens.json")
@@ -345,7 +361,8 @@ class MideaController:
         self._units: dict[int, MideaUnit] = {}
         self._devices: dict[int, MideaACDevice] = {}
         self._ips: dict[int, str] = {}
-        self._filled: set[int] = set()   # devices that got their follow-up query burst
+        self._filled: dict[int, float] = {}   # device id -> when its follow-up burst was sent
+        self._settle_deadline = 0.0      # poll fast until this time (see SETTLE_WINDOW)
         self._token_cache = _load_token_cache()
         self.error = ""
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
@@ -511,6 +528,7 @@ class MideaController:
                 dev.daemon = True
                 dev.open()
                 self._prime(dev)
+                self._settle_deadline = time.time() + SETTLE_WINDOW
                 self._devices[did] = dev
                 self._ips[did] = d["ip_address"]
                 connected_any = True
@@ -592,11 +610,11 @@ class MideaController:
         for did, dev in self._devices.items():
             if did in self._filled or not _status_ready(dev):
                 continue
-            self._filled.add(did)
+            self._filled[did] = time.time()
             try:
                 dev.refresh_status()
             except Exception:
-                self._filled.discard(did)
+                self._filled.pop(did, None)
 
     def poll(self, focused: bool) -> None:
         if self.mock:
@@ -605,6 +623,25 @@ class MideaController:
         self._discover_all()
         self._refresh_snapshot()
         self._fill_in()
+
+    def _fully_read(self, did: int, dev: MideaACDevice, now: float) -> bool:
+        """Has every wave of this unit's first picture arrived — status,
+        capabilities, and the follow-up burst (which has no ack, so it just
+        gets FILL_GRACE to land)?"""
+        if not (_status_ready(dev) and _caps_ready(dev)):
+            return False
+        sent_at = self._filled.get(did)
+        return sent_at is not None and now - sent_at >= FILL_GRACE
+
+    @property
+    def settling(self) -> bool:
+        """Is any connected unit still filling in its first picture? While one
+        is, the panel polls at SETTLE_POLL_INTERVAL so each wave reaches the
+        card as it lands instead of waiting out a 5s idle tick."""
+        now = time.time()
+        if now > self._settle_deadline:
+            return False
+        return not all(self._fully_read(did, dev, now) for did, dev in self._devices.items())
 
     # -- reads/commands (main thread) -------------------------------------
     def snapshot(self) -> dict[int, MideaUnit]:
@@ -736,6 +773,14 @@ class MideaSystem(System):
         self.selected = 0  # index into _online_units()
         self.scroll = 0
         self._num_buf: str | None = None
+
+    @property
+    def poll_interval_focused(self) -> float:
+        return SETTLE_POLL_INTERVAL if self.ctl.settling else 1.0
+
+    @property
+    def poll_interval_idle(self) -> float:
+        return SETTLE_POLL_INTERVAL if self.ctl.settling else 5.0
 
     @property
     def collapsed_height(self) -> int:
