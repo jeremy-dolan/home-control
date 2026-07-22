@@ -9,6 +9,18 @@ Split into:
     dict you can read with zero network I/O. Only the one-time cloud login
     (V3 token/key pairing) is ``async def`` — done via a single blocking
     ``asyncio.run(...)`` call, no dedicated event-loop thread needed.
+
+    Nothing here ever waits on a query. midea-local's ``connect(
+    check_protocol=True)`` sends 8 queries and blocks for each reply in turn,
+    so the two this unit ignores cost QUERY_TIMEOUT (2s) each and a card takes
+    ~7s to appear. Instead we connect without the protocol probe (TCP + V3
+    auth only), start the device's own thread, and hand it the two queries
+    that actually paint a card — status and B5 capabilities — as
+    fire-and-forget sends. The thread parses the replies into
+    ``dev.attributes``/``dev.capabilities`` and the next poll tick picks them
+    up: measured 0.2-0.4s to a full card against a quiet unit. The remaining
+    queries follow once the card is up, so a silent query costs nothing but
+    an unanswered packet.
   * MideaSystem — the panel: every unit (online or not) is always fully
     expanded as a 3-line card. ↕ picks which *online* unit hotkeys act on;
     p/m/f/s/e/t/d directly toggle/cycle that unit's fields; ←→ nudges its
@@ -49,6 +61,7 @@ from midealocal.cloud import get_midea_cloud
 from midealocal.const import DeviceType
 from midealocal.devices import device_selector
 from midealocal.devices.ac import MideaACDevice
+from midealocal.devices.ac.message import MessageCapabilitiesQuery, MessageQuery
 from midealocal.discover import discover as midea_discover
 
 from .. import config
@@ -110,6 +123,12 @@ class MideaUnit:
     # default field values. Once contacted it stays True even if the unit
     # later goes offline — then its dimmed card is genuine last-known state.
     contacted: bool = False
+    # Capabilities are a second, separate reply from the status one, and it
+    # can land a beat later. Until it does, the supported_* lists below are
+    # placeholder defaults, not this unit's real options — the panel shows
+    # the header alone rather than a card claiming the unit has one mode and
+    # one fan speed.
+    caps_known: bool = False
     power: bool = False
     mode: str = "COOL"            # AUTO | COOL | DRY | FAN_ONLY (no HEAT on this model)
     fan_speed: str = "AUTO"       # SILENT | LOW | MEDIUM | HIGH | AUTO | MAX
@@ -193,14 +212,14 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
 # timeout, even for a single IP that answers instantly).
 #
 # Only positive facts belong here. midealocal's per-connection
-# _unsupported_protocol list is tempting to cache too — connect() sends 8
-# queries and eats midealocal's 2s QUERY_TIMEOUT for each one this unit
-# ignores (2 of the 8, so 2-4s) — but that list is *derived from* those
-# timeouts, so a unit that was merely slow or busy once gets a working query
-# marked dead forever. It isn't even stable across clean runs: three probes
-# of the same unit learned two different lists. Caching it once left the
-# capabilities query permanently skipped, and every card rendered as a bare
-# Fan/Auto row.
+# _unsupported_protocol list was cached here once and must not be again: it
+# is *derived from* query timeouts, so a unit that was merely slow or busy
+# gets a working query marked dead forever, and it isn't stable across clean
+# runs — three probes of the same unit learned two different lists. Caching
+# it left the capabilities query permanently skipped, and every card rendered
+# as a bare Fan/Auto row. Nothing reads that list now (we never ask
+# midea-local to probe — see _try_connect), but the temptation returns every
+# time someone measures a connect.
 # ---------------------------------------------------------------------------
 
 
@@ -219,9 +238,43 @@ def _save_token_cache(cache: dict[str, dict[str, Any]], path: Path = TOKEN_CACHE
         pass
 
 
+def _status_ready(dev: MideaACDevice) -> bool:
+    """Has a status reply landed yet? ``mode`` is 0 until one does, and no
+    real mode maps to 0 — before that every attribute is a library default,
+    which would render as a confident card full of numbers we never read."""
+    return bool(dev.attributes.get("mode"))
+
+
+def _caps_ready(dev: MideaACDevice) -> bool:
+    """Has the B5 capabilities reply landed? Every AC reports at least one
+    mode flag, so their absence means it hasn't."""
+    caps = dev.capabilities or {}
+    return any(k in caps for k in ("cool_mode", "heat_mode", "auto_mode", "dry_mode"))
+
+
 def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     a = dev.attributes
     caps = dev.capabilities or {}
+    if not _caps_ready(dev):
+        # Status without capabilities: report the live fields and leave every
+        # supported_*/supports_* at its dataclass default, so nothing
+        # downstream mistakes "not told yet" for "not supported".
+        vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
+        return MideaUnit(
+            id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
+            online=dev.available, contacted=True, caps_known=False,
+            power=bool(a.get("power")),
+            mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
+            fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
+            swing_mode=_BOOLS_TO_SWING.get((vertical, horizontal), "OFF"),
+            target_temp_c=float(a.get("target_temperature") or 24.0),
+            indoor_temp_c=a.get("indoor_temperature"),
+            outdoor_temp_c=a.get("outdoor_temperature"),
+            fahrenheit=bool(a.get("temp_fahrenheit")),
+            eco=bool(a.get("eco_mode")), turbo=bool(a.get("boost_mode")),
+            display_on=bool(a.get("screen_display")),
+            filter_alert=bool(a.get("full_dust")), error_code=int(a.get("error_code") or 0),
+        )
     modes = [
         name
         for name, present in (
@@ -256,7 +309,7 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
     return MideaUnit(
         id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
-        online=dev.available, contacted=True,
+        online=dev.available, contacted=True, caps_known=True,
         power=bool(a.get("power")),
         mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
         fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
@@ -292,6 +345,7 @@ class MideaController:
         self._units: dict[int, MideaUnit] = {}
         self._devices: dict[int, MideaACDevice] = {}
         self._ips: dict[int, str] = {}
+        self._filled: set[int] = set()   # devices that got their follow-up query burst
         self._token_cache = _load_token_cache()
         self.error = ""
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
@@ -378,9 +432,29 @@ class MideaController:
         )
         if dev is None:
             return None
-        if dev.connect(check_protocol=True):
-            return dev
-        return None
+        # check_protocol=False keeps this to the TCP connect and the V3 auth
+        # handshake — still a real pairing verdict (a bad token/key raises and
+        # returns False), without the 8-query probe that blocks on every
+        # silent one. set_available() is connect()'s job only in the
+        # check_protocol branch, so do it here.
+        if not dev.connect(check_protocol=False):
+            return None
+        dev.set_available(True)
+        return dev
+
+    @staticmethod
+    def _prime(dev: MideaACDevice) -> None:
+        """Ask for the two replies a card is made of — live status and B5
+        capabilities — and don't wait for either. The device's own thread is
+        already running and parses whatever comes back."""
+        try:
+            version = dev._message_protocol_version
+            dev.build_send(MessageQuery(version), query=True)
+            dev.build_send(MessageCapabilitiesQuery(version), query=True)
+        except Exception:
+            # A dead socket here just means no card yet; the device thread's
+            # own connect loop takes over from this point.
+            pass
 
     def _discover_all(self) -> None:
         """Run a discovery pass, gated by DISCOVERY_RETRY_INTERVAL — a failure
@@ -436,9 +510,20 @@ class MideaController:
             if dev is not None:
                 dev.daemon = True
                 dev.open()
+                self._prime(dev)
                 self._devices[did] = dev
                 self._ips[did] = d["ip_address"]
                 connected_any = True
+                # Connected, but the primed status reply is still in flight and
+                # _refresh_snapshot won't publish a card until it lands. The
+                # synthetic placeholder keyed by IP was just dropped, so without
+                # this the panel has no units at all for that window and falls
+                # back to "Discovering...". Re-key it by the real device id.
+                self._units.setdefault(
+                    did,
+                    MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or d["ip_address"],
+                              online=False),
+                )
                 meta = {"ip": d["ip_address"], "port": d["port"], "type": d["type"],
                         "protocol": d["protocol"], "model": d.get("model", "")}
                 entry = self._token_cache.setdefault(str(did), {})
@@ -477,9 +562,7 @@ class MideaController:
             self._units[placeholder_id] = MideaUnit(id=placeholder_id, ip=ip, name=p.get("name") or ip, online=False)
 
         if connected_any:
-            with self._lock:
-                for did, dev in self._devices.items():
-                    self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+            self._refresh_snapshot()
             self.error = ""
         elif not self._units:
             if self._last_seen_count == 0:
@@ -491,12 +574,29 @@ class MideaController:
         """No network I/O — each connected device's own persistent background
         thread keeps ``dev.attributes``/``dev.available`` live-updated, so
         this just re-derives MideaUnit snapshots from current in-memory
-        state."""
+        state. A device whose first status reply hasn't arrived keeps its
+        placeholder card: there is nothing real to show yet."""
         if not self._devices:
             return
         with self._lock:
             for did, dev in self._devices.items():
-                self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+                if _status_ready(dev):
+                    self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+
+    def _fill_in(self) -> None:
+        """Once a unit's card is up, ask for everything else exactly once —
+        the fields the two priming queries don't carry (screen_display and
+        error_code ride on MessageNewProtocolQuery, plus power/humidity
+        counters). Fire-and-forget again, so the queries this unit ignores
+        cost nothing but an unanswered packet."""
+        for did, dev in self._devices.items():
+            if did in self._filled or not _status_ready(dev):
+                continue
+            self._filled.add(did)
+            try:
+                dev.refresh_status()
+            except Exception:
+                self._filled.discard(did)
 
     def poll(self, focused: bool) -> None:
         if self.mock:
@@ -504,6 +604,7 @@ class MideaController:
             return
         self._discover_all()
         self._refresh_snapshot()
+        self._fill_in()
 
     # -- reads/commands (main thread) -------------------------------------
     def snapshot(self) -> dict[int, MideaUnit]:
@@ -720,6 +821,12 @@ class MideaSystem(System):
             # a single dimmed "connecting…" line rather than a card full of
             # fabricated defaults.
             return [self._dim(header)]
+        if not u.caps_known:
+            # Status has landed but the capabilities reply hasn't: the header
+            # is all real (badge, name, temperatures), while the option rows
+            # would be placeholder defaults. Show the header alone until the
+            # unit tells us what it actually supports.
+            return [header if u.online and u.power else self._dim(header)]
         row_a = self._row_a(u, width)
         row_b = self._row_b(u, width)
         if not u.online or not u.power:

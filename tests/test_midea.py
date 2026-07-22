@@ -24,9 +24,12 @@ def test_fmt_temp():
 
 
 def _unit(**kw: object) -> midea.MideaUnit:
-    # Represents a real unit we've read at least once, so contacted=True by
-    # default; pass contacted=False to model a never-reached placeholder.
-    base: dict[str, object] = dict(id=1, ip="192.168.1.50", name="LR", online=True, contacted=True)
+    # Represents a real unit we've read at least once, so contacted=True and
+    # caps_known=True by default; pass contacted=False to model a
+    # never-reached placeholder, or caps_known=False for one whose
+    # capabilities reply hasn't landed yet.
+    base: dict[str, object] = dict(id=1, ip="192.168.1.50", name="LR", online=True,
+                                   contacted=True, caps_known=True)
     base.update(kw)
     return midea.MideaUnit(**base)  # type: ignore[arg-type]
 
@@ -160,6 +163,20 @@ def test_card_rows_uncontacted_unit_is_single_connecting_line():
     text = "".join(seg.text for seg in rows[0])
     assert "connecting" in text and "Mode" not in text
     assert all(seg.dim for seg in rows[0])
+
+
+def test_card_rows_status_without_capabilities_is_header_only():
+    # The status reply and the capabilities reply are separate packets. In
+    # between, the supported_* lists are placeholder defaults — rendering them
+    # produced the "Mode Fan / Fan Auto" collapsed card. Show the header,
+    # which is entirely real, and wait for the rest.
+    s = midea.MideaSystem()
+    u = _unit(power=True, mode="COOL", caps_known=False, indoor_temp_c=24.0)
+    rows = s._card_rows(u, is_selected=False, width=80)
+    assert len(rows) == 1
+    text = "".join(seg.text for seg in rows[0])
+    assert "COOL" in text and "75°F" in text     # real status is shown
+    assert "Mode" not in text and "Fan" not in text
 
 
 def test_card_rows_contacted_but_offline_shows_last_known_card():
@@ -425,7 +442,7 @@ def test_every_fahrenheit_setpoint_survives_the_wire(monkeypatch):
     # whole °F must land on its own half-degree and read back as itself.
     ctl = _pinned_controller(monkeypatch, [])
     ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
-                                    contacted=True, fahrenheit=True)
+                                    contacted=True, caps_known=True, fahrenheit=True)
     for f in range(61, 87):
         sent = ctl.target_c_for(1, f)
         stored = _wire_roundtrip(sent)
@@ -436,7 +453,7 @@ def test_every_fahrenheit_setpoint_survives_the_wire(monkeypatch):
 def test_celsius_setpoint_is_quantized_too(monkeypatch):
     ctl = _pinned_controller(monkeypatch, [])
     ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
-                                    contacted=True, fahrenheit=False)
+                                    contacted=True, caps_known=True, fahrenheit=False)
     assert ctl.target_c_for(1, 23) == 23.0
 
 
@@ -451,3 +468,24 @@ def test_edit_mirrors_locally_without_waiting(mock_env):
     s.handle_key(curses.KEY_RIGHT)
     after = s.ctl.snapshot()[unit.id]
     assert after.target_temp_c > unit.target_temp_c
+
+
+def test_pinned_card_never_falls_back_to_discovering(monkeypatch):
+    # The card is published only once a status reply lands, but the synthetic
+    # placeholder is dropped as soon as the device connects. Without a
+    # stand-in keyed by the real device id, the panel has zero units for that
+    # window and renders "Discovering..." — after already showing the unit.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+
+    class _Connecting(_FakeConnected):
+        attributes = {"mode": 0}          # connected, no status reply yet
+
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: _Connecting())
+    monkeypatch.setattr(ctl, "_fill_in", lambda: None)
+    assert ctl.snapshot(), "pinned unit must render before the first poll"
+    ctl.poll(focused=True)
+    units = ctl.snapshot()
+    assert len(units) == 1, "a connecting unit must still occupy a card"
+    u = next(iter(units.values()))
+    assert u.name == "Den" and not u.contacted   # renders "connecting...", not "Discovering..."
