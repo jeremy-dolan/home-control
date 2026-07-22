@@ -403,11 +403,13 @@ def draw_box(stdscr: curses.window, top: int, left: int, height: int, width: int
              title: str, color: str, *, focused: bool = False) -> Region:
     """Draw a rounded border with an embedded title; return the interior Region.
 
-    The border (and title) use the system's accent color; focused boxes draw the
-    border bold. The interior is cleared. Interior region is inset by 1 on all
-    sides, with one extra column of padding on left/right for breathing room.
+    The border (and title) use the system's accent color, lightened and bolded
+    while focused — bold alone can't brighten a 256-color pair, and on box-drawing
+    glyphs its extra weight barely reads. The interior is cleared. Interior region
+    is inset by 1 on all sides, with one extra column of padding on left/right for
+    breathing room.
     """
-    border = attr(color, bold=focused)
+    border = attr(lighten(color) if focused else color, bold=focused)
 
     # Top border with title:  ╭─── Title ──────────────╮
     label = f"{_TL}{_H * 3} {title} "
