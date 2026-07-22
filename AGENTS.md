@@ -33,8 +33,9 @@ per-device blurbs live — `README.md`'s `## Device support` and that panel's
 
 When a work session looks finished — a PR merged, the branch's task delivered,
 or the user signals they're wrapping up — suggest running `/wrap-up` once. It
-checks whether anything learned this session belongs in these docs or memory
-(usually nothing). Offer it; don't run it unprompted.
+checks whether anything learned this session belongs in these docs or memory,
+and whether the branch settled any `TODO.md` entry (usually nothing on both
+counts). Offer it; don't run it unprompted.
 
 ## Adding support for a new device
 
