@@ -8,6 +8,10 @@ __pycache__/
 build/
 dist/
 .DS_Store
+# Editor swap/backup files
+*.swp
+*.swo
+*~
 # Claude Code: ignore machine-local state (permission grants, agent worktrees)
 /.claude/*
 # ...but share skills/settings
