@@ -60,16 +60,14 @@ screen.
 
 ## Directory map
 
-- `home_control/` — the package (tracked): `app.py` (shell/main loop),
-  `systems/` (one file per device integration), `voice/`, `config.py`,
-  `layout.py`, `poller.py`, `ui.py` (curses drawing primitives, colors).
-- `tests/` — pytest suite (tracked).
+- `home_control/` — the package: `app.py` (shell/main loop), `systems/` (one
+  file per device integration), `voice/`, `config.py`, `layout.py`,
+  `poller.py`, `ui.py` (curses drawing primitives, colors).
+- `tests/` — pytest suite.
 - `.githooks/` — hooks; needs `core.hooksPath` set once (see Commands).
-- `dev/`, `standalone-apps/`, `plugins/` — prototypes, network probes, and the
-  original standalone single-device scripts this was built from.
-  **Intentionally gitignored** (see `.gitignore`) — not shipped, don't add to
-  them expecting them to end up in the repo.
-- `README.ideas` — brainstorming notes, also gitignored.
+- `tools/` — scripts run by hand, not imported and not shipped:
+  `roku_query.py`, `ssdp_probe.py`, `mdns_probe.py` probe hardware (target
+  as an argument).
 
 ## Config
 
