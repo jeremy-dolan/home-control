@@ -12,6 +12,64 @@ import curses
 import textwrap
 from dataclasses import dataclass
 
+# ===========================================================================
+# UI conventions
+#
+# The visual language every panel shares.
+#
+# Drawing. Panels draw only through this module, never raw curses; layout math
+#   lives in layout.py. Each panel is a rounded box (draw_box) bordered and
+#   titled in its system accent, its interior a clipped Region (an 80-column
+#   terminal yields a 76-column interior). The focused panel expands to fill
+#   leftover height and brightens its border; the rest stay collapsed. Design
+#   for 80 columns.
+#
+# Colour. One PALETTE, authored as RGB hex for a 256-colour terminal — below
+#   that every name falls through to the default foreground (no 8-colour
+#   variant by design; layout, weight, cursors and glyphs carry the UI without
+#   hue). Entries are semantic roles that mean the same in any panel — warn
+#   (working, wants attention), fault (unreachable/failed), muted (a value that
+#   is itself off/absent), info (neutral secondary series) — plus one base
+#   accent per system in SYSTEM_COLORS. Accent is chrome only (borders, cursors,
+#   hotkeys, section headers, bars); body text stays the terminal default.
+#
+# Accents are base shades. lighten(accent) raises HSL lightness (holding hue
+#   and saturation) for the brighter form used by hotkeys, focused borders and
+#   selected rows — A_BOLD can't brighten a 256-colour pair. Author accents with
+#   headroom; one near the top of its lightness range makes the two shades read
+#   as one.
+#
+# Badges. Every panel leads its collapsed line and expanded header with a
+#   "● LABEL" badge, coloured by badge_color(state, accent): BADGE_ACTIVE ->
+#   accent + bold (doing its job), BADGE_IDLE -> muted (reachable but
+#   off/stopped), BADGE_FAULT -> fault. An item going unreachable (one light,
+#   one AC unit) is IDLE; FAULT is reserved for a whole panel's device being
+#   unreachable. Pad the label to a fixed width so the column after it doesn't
+#   shift as the state changes.
+#
+# Selection. cursor(accent, sel) — an accent "▶ " when selected, else two
+#   blanks — is the guaranteed cue and owns the leading two columns of every
+#   selectable row. highlight(line, accent) is optional reinforcement (bold
+#   every segment, clear dim, lift accent segments to
+#   lighten(accent)), used by dense scrolling lists (Hue, Sonos) and
+#   deliberately not by card layouts (Midea, whose _dim already means
+#   off/unreachable, so row-bold would collide). Seg(lift=False) opts a segment
+#   out of the lift; the cursor uses it, so the marker stays base while the row
+#   it marks brightens.
+#
+# dim vs muted. dim=True is secondary/supporting text (labels, hints, static
+#   identity) and is cleared by selection bolding. muted is a value that is
+#   itself off/absent/inactive and survives it.
+#
+# Primitives & glyphs. level_bar() (a "━━━◉───" slider, ◉ knob), toggle_dot()
+#   (●/○), hint()/hint_row() (toolbar hints: hotkey brightened + bold, label in
+#   plain accent), justify()/pad_between() (left/right-aligned rows),
+#   select_row() (plain-text selectable row). ● leads a badge ("● ONLINE") and
+#   trails a toggle ("Eco ●"); ◉ is only the level-bar knob. Box chrome is
+#   rounded (╭╮╰╯); square corners (┌┐└┘) are reserved for content nested inside
+#   a panel (Roku's input boxes) — a deliberate content-vs-chrome cue.
+# ===========================================================================
+
 
 def wrap(text: str, width: int, max_lines: int | None = None) -> list[str]:
     """Word-wrap `text` to `width` columns, returning a list of lines.
@@ -37,7 +95,7 @@ def wrap(text: str, width: int, max_lines: int | None = None) -> list[str]:
 # the palette is left unallocated and every name renders in the terminal's
 # default foreground: there is deliberately no hand-tuned 8-color variant, since
 # layout, bold/dim weight, cursors and badge glyphs already carry the UI without
-# hue. See "UI conventions" in ARCHITECTURE.md.
+# hue. See the "UI conventions" block at the top of this module.
 PALETTE = {
     # -- Semantic roles: what a color *means*, in any panel. ----------------
     "warn":  "#E3B341",  # working, but wants attention (filter due, error code)
@@ -171,12 +229,24 @@ def lighten(color: str, t: float = 0.4) -> str:
     instead would desaturate: for an already-saturated accent that yields a paler
     colour rather than a brighter one, leaving the two shades hard to tell apart.
     """
-    if color not in PALETTE:
+    rgb = _lighten_rgb(color, t)
+    if rgb is None:
         return color
+    return rgb_color(*rgb)
+
+
+def _lighten_rgb(color: str, t: float = 0.4) -> tuple[int, int, int] | None:
+    """The pure HSL lift behind `lighten()`: the RGB triple for a palette
+    `color` raised `t` toward full lightness, or None when `color` isn't in the
+    palette. Curses-free, so the accent-headroom invariant is unit-testable —
+    an accent authored with no headroom quantises to the same 256-cube index as
+    its base and the two shades render as one."""
+    if color not in PALETTE:
+        return None
     r, g, b = (c / 255 for c in _hex_rgb(PALETTE[color]))
     h, lum, s = colorsys.rgb_to_hls(r, g, b)
     r, g, b = colorsys.hls_to_rgb(h, lum + (1 - lum) * t, s)
-    return rgb_color(round(r * 255), round(g * 255), round(b * 255))
+    return round(r * 255), round(g * 255), round(b * 255)
 
 
 # Status-badge states. Every panel leads its collapsed line (and its expanded
@@ -197,15 +267,13 @@ def badge_color(state: str, accent: str) -> str:
     return {BADGE_ACTIVE: accent, BADGE_IDLE: "muted"}.get(state, "fault")
 
 
-def attr(color: str = "", *, bold: bool = False, dim: bool = False, reverse: bool = False) -> int:
+def attr(color: str = "", *, bold: bool = False, dim: bool = False) -> int:
     """Build a curses attribute from a color name + flags."""
     a = curses.color_pair(_PAIRS.get(color, 0))
     if bold:
         a |= curses.A_BOLD
     if dim:
         a |= curses.A_DIM
-    if reverse:
-        a |= curses.A_REVERSE
     return a
 
 
@@ -222,7 +290,6 @@ class Seg:
     color: str = ""
     bold: bool = False
     dim: bool = False
-    reverse: bool = False
     # False pins this run to its own colour when the row is selected, exempting
     # it from highlight()'s accent lift. The ▶ cursor uses it: it is already the
     # thing marking the row, so brightening it too says nothing extra.
@@ -260,18 +327,10 @@ def seg_len(line: Line) -> int:
     return sum(len(s.text) for s in line)
 
 
-def justify(left: Line, right: Line, width: int, *, reverse: bool = False) -> Line:
-    """Combine left + right styled runs with a space pad so right hugs the edge.
-
-    If `reverse`, every segment (including the pad) is drawn reversed — used to
-    highlight a selected row across its full width.
-    """
+def justify(left: Line, right: Line, width: int) -> Line:
+    """Combine left + right styled runs with a space pad so right hugs the edge."""
     gap = max(1, width - seg_len(left) - seg_len(right))
-    out: Line = [*left, Seg(" " * gap), *right]
-    if reverse:
-        for s in out:
-            s.reverse = True
-    return out
+    return [*left, Seg(" " * gap), *right]
 
 
 def hint(key: str, label: str, color: str, *, paren: bool = False, key_color: str | None = None) -> Line:
@@ -335,7 +394,7 @@ class Region:
         self.width = width
 
     def text(self, row: int, col: int, s: str, color: str = "", *, bold: bool = False,
-             dim: bool = False, reverse: bool = False) -> int:
+             dim: bool = False) -> int:
         """Write a string at (row, col) within the region. Returns next free col."""
         if not (0 <= row < self.height) or col >= self.width:
             return col
@@ -348,7 +407,7 @@ class Region:
         s = s[:avail]
         try:
             self.stdscr.addstr(self.top + row, self.left + col, s,
-                               attr(color, bold=bold, dim=dim, reverse=reverse))
+                               attr(color, bold=bold, dim=dim))
         except curses.error:
             pass
         return col + len(s)
@@ -376,8 +435,7 @@ class Region:
     def segs(self, row: int, line: Line, col: int = 0) -> None:
         """Write a list of styled segments on a single row."""
         for seg in line:
-            col = self.text(row, col, seg.text, seg.color,
-                            bold=seg.bold, dim=seg.dim, reverse=seg.reverse)
+            col = self.text(row, col, seg.text, seg.color, bold=seg.bold, dim=seg.dim)
             if col >= self.width:
                 break
 
@@ -387,9 +445,9 @@ class Region:
 
 def cursor(accent: str, sel: bool) -> Seg:
     """The leading two columns of a selectable row: an accent ▶ when selected, two
-    blanks otherwise. The app never uses reverse video to mark a selection — the
-    cursor plus bolding the row does that job (see "UI conventions" in
-    ARCHITECTURE.md), so every list builds its rows starting with this Seg."""
+    blanks otherwise. The cursor plus bolding the row marks a selection (see the
+    "UI conventions" block at the top of this module), so every list builds its
+    rows starting with this Seg."""
     return Seg("▶ ", accent, bold=True, lift=False) if sel else Seg("  ")
 
 
@@ -412,7 +470,13 @@ def highlight(line: Line, accent: str) -> Line:
     text was only bolded ends up half-highlighted — the slider moves, the ``● ON``
     beside it doesn't. Callers therefore build rows with the *base* accent
     throughout and let this do the lifting. Segments marked ``lift=False`` — the
-    ▶ cursor — keep their own colour. Mutates and returns the same list.
+    ▶ cursor — keep their own colour.
+
+    Mutates and returns the *same* ``Seg`` objects, so pass a freshly built row
+    each frame: applied twice (or to a cached/shared ``Line``) it compounds —
+    the second pass sees dim already cleared and the accent already lifted, so
+    an un-selected row that reused those segments would stay bright. Panels
+    rebuild their rows every render, which is what keeps this safe.
     """
     bright = lighten(accent)
     for s in line:

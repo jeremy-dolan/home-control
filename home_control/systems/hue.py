@@ -937,7 +937,7 @@ class HueSystem(System):
         self.scroll = max(0, min(self.scroll, max(0, total - visible)))
 
     def _room_row(self, room: Room, width: int, *, selected: bool, scenes_suffix: bool = False) -> Line:
-        # Selection cue: an accent ▶ cursor + the whole row bolded (no reverse video).
+        # Selection cue: an accent ▶ cursor + the whole row bolded.
         cur = cursor(self.color, selected)
         name = f"{room.name} — Scenes" if scenes_suffix else room.name
         left = [cur, Seg(name, self.color, bold=True)]

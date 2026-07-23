@@ -58,6 +58,14 @@ Logging: the root logger writes to a file (`$HOME_CONTROL_LOG`, default
 calls (phue2/soco/midealocal on network errors) would corrupt the curses
 screen.
 
+## UI conventions
+
+The panels share one visual language — status badges, a single hex palette with
+one base accent per system, `cursor`-plus-optional-`highlight` selection, dim vs
+muted, and the shared drawing primitives — kept consistent by drawing only
+through `ui.py`. The authoritative rules live in the **UI conventions** block at
+the top of `ui.py`; read it before any UI change.
+
 ## Directory map
 
 - `home_control/` — the package: `app.py` (shell/main loop), `systems/` (one

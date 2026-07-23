@@ -1,6 +1,20 @@
 """Tests for the curses-free drawing primitives in `home_control.ui`."""
 
-from home_control.ui import BADGE_ACTIVE, BADGE_FAULT, BADGE_IDLE, PALETTE, SYSTEM_COLORS, badge_color, cursor, hint
+from home_control.ui import (
+    BADGE_ACTIVE,
+    BADGE_FAULT,
+    BADGE_IDLE,
+    PALETTE,
+    SYSTEM_COLORS,
+    Seg,
+    _hex_rgb,
+    _lighten_rgb,
+    _nearest_256,
+    badge_color,
+    cursor,
+    highlight,
+    hint,
+)
 
 
 def _text(segs):
@@ -66,3 +80,57 @@ def test_cursor_owns_two_columns_either_way():
     assert len(cursor("hue_blue", True).text) == len(cursor("hue_blue", False).text) == 2
     assert cursor("hue_blue", True).color == "hue_blue"
     assert cursor("hue_blue", False).color == ""
+
+
+# --- accent headroom -------------------------------------------------------
+# An accent authored too light leaves lighten() no room: base and lifted shades
+# quantise to the same 256-cube index and read as one colour. That is the exact
+# regression Router/Sonos/Yoto have each hit, so guard it for every accent.
+# Distinctness is the objective floor; how *far* apart is a visual judgement.
+
+
+def test_every_accent_lightens_to_a_distinct_256_index():
+    for role in SYSTEM_COLORS.values():
+        base_rgb = _hex_rgb(PALETTE[role])
+        lit_rgb = _lighten_rgb(role)
+        assert lit_rgb is not None, role
+        base_idx = _nearest_256(*base_rgb)
+        lit_idx = _nearest_256(*lit_rgb)
+        assert base_idx != lit_idx, f"{role} has no lighten() headroom (base==lifted at index {base_idx})"
+
+
+def test_lighten_rgb_is_none_outside_the_palette():
+    assert _lighten_rgb("not_a_color") is None
+
+
+def test_lighten_rgb_raises_lightness_without_desaturating_to_white():
+    # The lift brightens; it must not wash a saturated accent out to grey/white.
+    r, g, b = _lighten_rgb("hue_blue")
+    assert (r, g, b) != (255, 255, 255)
+    assert max(r, g, b) - min(r, g, b) > 20  # still visibly chromatic
+
+
+# --- highlight() -----------------------------------------------------------
+# The selection reinforcement: bold every segment, clear dim so the bold reads,
+# lift accent segments — but leave lift=False segments (the cursor) at their
+# base colour so the marker itself doesn't brighten with the row.
+
+
+def test_highlight_bolds_every_segment_and_clears_dim():
+    line = [Seg("a", dim=True), Seg("b", "hue_blue"), Seg("c")]
+    highlight(line, "hue_blue")
+    assert all(s.bold for s in line)
+    assert all(not s.dim for s in line)
+
+
+def test_highlight_leaves_lift_false_segments_at_their_base_colour():
+    cur = cursor("hue_blue", True)  # lift=False, colour == accent
+    assert cur.lift is False and cur.color == "hue_blue"
+    highlight([cur], "hue_blue")
+    assert cur.color == "hue_blue"  # the ▶ marker must not brighten with its row
+
+
+def test_highlight_only_touches_segments_carrying_the_accent():
+    plain = Seg("body")  # default colour, not the accent
+    highlight([plain], "hue_blue")
+    assert plain.color == ""  # body text stays the terminal default

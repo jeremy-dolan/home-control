@@ -37,10 +37,10 @@ the `System` contract described there.
    - Add `voice_actions()` / `voice_context()` if voice control fits — read the
      `claude-api` skill before writing the Anthropic call.
 
-4. **Follow the UI conventions** the reference panels use: a colored status
-   badge + summary when collapsed; the shared `ui.py` primitives for selection
-   (cursor + bold, never reverse video), level bars, and color; and a distinct
-   system accent color. Draw only through `ui.py`, never raw curses.
+4. **Follow the UI conventions** — the authoritative rules are the **UI
+   conventions** block at the top of `home_control/ui.py` (badges, palette and
+   accents, selection, dim vs muted, primitives). The reference panels from
+   step 2 show them in practice.
 
 5. **Wire config**: add a `[<device>]` section read via `config.py`,
    auto-detecting when unset. Mind the template byte-identity rule under Config
