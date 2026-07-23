@@ -20,6 +20,7 @@ pytest tests/test_midea.py     # run a single test file
 pytest tests/test_midea.py -k some_test_name
 ruff check .                    # lint (line-length 120, extend-select I, UP)
 pyright                         # type check (basic mode)
+git config core.hooksPath .githooks   # one-time, per clone: enable the hooks
 ```
 
 ## The System contract
@@ -63,6 +64,7 @@ screen.
   `systems/` (one file per device integration), `voice/`, `config.py`,
   `layout.py`, `poller.py`, `ui.py` (curses drawing primitives, colors).
 - `tests/` — pytest suite (tracked).
+- `.githooks/` — hooks; needs `core.hooksPath` set once (see Commands).
 - `dev/`, `standalone-apps/`, `plugins/` — prototypes, network probes, and the
   original standalone single-device scripts this was built from.
   **Intentionally gitignored** (see `.gitignore`) — not shipped, don't add to

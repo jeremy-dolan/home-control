@@ -22,6 +22,12 @@ Operating guidance for coding agents in this repo. Read alongside
 - **Don't comment on code that isn't there** — put the reason something was
   removed in the commit message, not a note at the site.
 
+## Commit messages
+
+Follow the 50/72 rule: subject of 50 characters or fewer, blank line, body
+hard-wrapped at 72. Subject in the imperative mood, no trailing period.
+`.githooks/commit-msg` enforces all but the mood.
+
 ## Keeping docs current
 
 If you change the `System` contract, directory layout, config handling, or
