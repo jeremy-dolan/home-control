@@ -25,6 +25,9 @@ Follow the 50/72 rule: subject of 50 characters or fewer, blank line, body
 hard-wrapped at 72. Subject in the imperative mood, no trailing period.
 `.githooks/commit-msg` enforces all but the mood.
 
+Prefix the subject with the subsystem it touches — `midea:`, `ui:`, `tools:`,
+`docs:` — and drop the prefix only when the change is genuinely repo-wide.
+
 ## Keeping docs current
 
 If you change the `System` contract, directory layout, config handling, or
