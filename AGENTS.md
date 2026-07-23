@@ -26,6 +26,7 @@ Operating guidance for coding agents in this repo. Read alongside
 
 Follow the 50/72 rule: subject of 50 characters or fewer, blank line, body
 hard-wrapped at 72. Subject in the imperative mood, no trailing period.
+`.githooks/commit-msg` enforces all but the mood.
 
 ## Keeping docs current
 

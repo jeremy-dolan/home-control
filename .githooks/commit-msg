@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Enforce the 50/72 rule documented in AGENTS.md.
+#
+# Exempt: merges, reverts, and fixup!/squash! (git writes those subjects, or
+# rebase rewrites them later), plus body lines nothing can wrap — a bare URL,
+# a long path, an indented command example.
+
+set -u
+
+msg_file=$1
+fail=0
+
+note() {
+    [ "$fail" -eq 0 ] && echo "commit-msg: message does not follow the 50/72 rule (AGENTS.md)" >&2
+    fail=1
+    echo "  $1" >&2
+}
+
+# Strip comments; git appends the status block as '#' lines.
+mapfile -t lines < <(grep -v '^#' "$msg_file")
+
+subject=""
+for line in "${lines[@]}"; do
+    if [ -n "${line// /}" ]; then
+        subject=$line
+        break
+    fi
+done
+
+case $subject in
+    Merge\ *|Revert\ *|fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
+esac
+
+if [ -z "$subject" ]; then
+    echo "commit-msg: empty commit message" >&2
+    exit 1
+fi
+
+if [ "${#subject}" -gt 50 ]; then
+    note "subject is ${#subject} chars, limit 50:"
+    note "  $subject"
+fi
+
+case $subject in
+    *.) note "subject ends in a period" ;;
+esac
+
+# Body starts after the subject and its blank line.
+in_body=0
+blank_seen=0
+lineno=0
+for line in "${lines[@]}"; do
+    lineno=$((lineno + 1))
+    if [ "$in_body" -eq 0 ]; then
+        [ "$line" = "$subject" ] && in_body=1 && continue
+        continue
+    fi
+    if [ "$blank_seen" -eq 0 ]; then
+        if [ -n "${line// /}" ]; then
+            note "no blank line between subject and body (line $lineno)"
+        fi
+        blank_seen=1
+        continue
+    fi
+    [ "${#line}" -le 72 ] && continue
+    # An indented line is a deliberate block; a line with no spaces is one
+    # unbreakable token. Neither can be rewrapped, so neither is a violation.
+    case $line in
+        ' '*|$'\t'*) continue ;;
+    esac
+    [ "${line#* }" = "$line" ] && continue
+    note "line $lineno is ${#line} chars, limit 72:"
+    note "  $line"
+done
+
+[ "$fail" -eq 0 ] || echo "  (amend with: git commit --amend)" >&2
+exit "$fail"
