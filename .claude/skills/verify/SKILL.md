@@ -15,6 +15,14 @@ cube colour there. A capture shows the *quantised* rendering, not the hex —
 terminals with `init_color` (kitty, iTerm, xterm) show the exact value. Treat
 tmux SGR codes as a floor, and confirm anything subtle in a real terminal.
 
+Don't chase the exact hex by capturing under a `ccc`-capable TERM instead.
+There `init_colors()` redefines palette slots via `init_color`, which ncurses
+emits as OSC 4 (`ESC]4;<slot>;rgb:...`) and thereafter references as a plain
+`ESC[38;5;<slot>`. Any capture that doesn't track the redefinition resolves
+those slots against its own stock table, so the colours come back confidently
+wrong rather than merely approximate. tmux's quantised index is the honest
+reading.
+
 ## Launch (from any checkout/worktree)
 
 Default to **80×50** — the app is designed with an 80-column aesthetic in

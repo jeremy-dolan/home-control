@@ -6,14 +6,11 @@ Operating guidance for coding agents in this repo. Read alongside
 ## Repo rules
 
 - Never force-push, merge, or push to `main` without the user explicitly asking.
-- `dev/`, `standalone-apps/`, `plugins/`, `README.ideas` are gitignored on
-  purpose (see the directory map in `ARCHITECTURE.md`) — don't `git add -f`
-  them without checking with the user first.
-- `.claude/` is partly tracked: `.claude/skills/` and `.claude/settings.json`
-  are committed; everything else under it is ignored — `settings.local.json`
-  is per-machine permission grants, `worktrees/` is agent scratch space. Keep
-  skills checkout-agnostic (derive paths from git, don't hardcode
-  `/home/<user>/...`) so they work from a worktree.
+- Don't `git add -f` an ignored path without checking with the user first.
+- Skills under `.claude/skills/` are tracked; the rest of `.claude/` is
+  machine-local scratch. Editing a skill is a repo change — commit it. Skills
+  also run from worktrees, so derive paths with `git rev-parse` instead of
+  hardcoding a checkout (see `verify`).
 
 ## Code conventions
 

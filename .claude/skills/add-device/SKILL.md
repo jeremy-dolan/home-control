@@ -57,4 +57,4 @@ the `System` contract described there.
    panel's `help_notes()` — keep them in sync.
 
 9. **Verify**: `pytest`, `ruff check .`, `pyright`; then drive the real UI with
-   the `verify` skill (or `dev/screenshot.py`) to confirm it renders.
+   the `verify` skill to confirm it renders.
