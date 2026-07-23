@@ -167,6 +167,15 @@ brightens.
   is no single entry point. Folding `select_row` into a thin wrapper over
   `highlight()` is the remaining cleanup.
 
+  From the UI review: `select_row` writes plain strings via `region.text`, so
+  its selected rows get cursor + bold but no accent lift — harmless only because
+  a plain-text row carries no accent segment to lift. The migration is therefore
+  mechanical: wrap the row text in a single default-colour `Seg`, run it through
+  `cursor()` + `highlight()`, draw the resulting `Line` — behaviour preserved
+  (bold, nothing to lift). Best done alongside the shared-widgets consolidation
+  ("Shared editable-field + numeric-entry widget" / "Shared scroll-clamp helper"
+  below): all three are the same "promote a per-panel pattern into `ui.py`" move.
+
 ### Not doing: identical selection in every panel
 
 The original "done when" asked that selection look identical across panels. That
@@ -182,7 +191,44 @@ cards where a whole bolded card reads as noise rather than focus.
 
 The convention to document instead: **the cursor is the guaranteed selection
 cue in every panel; row-bold + accent lift is an optional reinforcement that
-dense scrolling lists (Hue, Sonos) use and card layouts (Midea) do not.**
+dense scrolling lists (Hue, Sonos) use and card layouts (Midea) do not.** — now
+done, stated in the "UI conventions" block at the top of `ui.py`.
+
+## Shared editable-field + numeric-entry widget
+
+**Priority:** low · **Scope:** `home_control/ui.py` (or a new `widgets.py`),
+`home_control/systems/hue.py`, `home_control/systems/midea.py`
+
+There's a latent "editable field + numeric entry" widget trying to exist.
+`hue.py` and `midea.py` each define their own `EditableField` dataclass *and*
+their own near-identical `_num_buf` / `_handle_num_entry` typed-entry state
+machine (digit capture → backspace → ESC-cancel → ENTER-commit-with-clamp).
+That's the same interaction implemented twice, differing only in field
+metadata. A small shared widget — an enum-cycle + numeric-entry buffer living
+in `ui.py` (or a new `widgets.py`) — would collapse both. This is the biggest
+DRY win.
+
+## Shared scroll-clamp helper
+
+**Priority:** low · **Scope:** `home_control/ui.py`, `hue.py`, `midea.py`,
+`roku.py`, `router.py`
+
+Every panel re-implements scroll clamping. `hue._clamp_scroll_rows`,
+`midea._clamp_scroll`, `roku._clamp_scroll` (free fn), and `router` inline all
+do "keep cursor visible, clamp scroll to `[0, total-visible]`." Four copies of
+one function. A single `clamp_scroll(cursor, scroll, visible, total)` in `ui.py`
+(or a tiny `ScrollView`) removes them. Cheap, uncontroversial.
+
+## Promote a shared toggle_chip
+
+**Priority:** low · **Scope:** `home_control/ui.py`, `midea.py`, `sonos.py`
+
+`midea._toggle_chip` is the nicest realization of the toggle convention
+(mnemonic first letter accent, whole chip accent+bold when on). If it lived in
+`ui.py`, Sonos's play-mode dots could adopt it — which would also settle the
+"same glyph, different emphasis" question the task flagged as undecided. My
+recommendation on that question: **enabled = accent+bold, disabled = dim**,
+everywhere. Sonos's dots-stay-dim-both-ways reads as a bug next to Midea.
 
 ## YouTube Music search + playback in the Sonos panel
 
