@@ -20,6 +20,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .. import config
 from ..ui import (
@@ -248,6 +249,7 @@ class HueController:
         self.info = BridgeInfo()
         self._v2_ids: dict[int, str] = {}  # v1 light id → clip/v2 UUID (lazy)
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
+        self._mock_now: datetime | None = None  # set by push_time() under mock
 
     # -- connection / polling (background thread) --------------------------
     def poll(self) -> None:
@@ -498,6 +500,28 @@ class HueController:
         except Exception as e:  # noqa: BLE001
             self.error = str(e)
             return {}
+
+    def push_time(self) -> bool:
+        """Set the bridge clock to the local host's UTC time. Returns success.
+
+        The bridge normally keeps time over NTP; when that is blocked its clock
+        drifts and silently misfires schedules. ``PUT /config`` with a UTC
+        stamp is writable (verified against a real bridge), so this is the
+        in-app nudge for the drift the bridge-info view flags.
+        """
+        now = datetime.now(UTC)
+        if self.mock:
+            self._mock_now = now
+            return True
+        if not self.connected or self._bridge is None:
+            return False
+        try:
+            b = self._bridge
+            b.request("PUT", f"/api/{b.username}/config", {"UTC": now.strftime("%Y-%m-%dT%H:%M:%S")})
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.error = str(e)
+            return False
 
     def group_action(self, gid: int) -> tuple[dict, dict]:
         """(action, state) for a Room group; used to seed the device dialog."""
@@ -810,13 +834,19 @@ class HueController:
                                    Scene("s3", "Energize", 1), Scene("s4", "Nightlight", 1)]}
 
     def _mock_config(self) -> dict:
+        # Fixed-in-the-past clock so the drift path is always live under mock;
+        # push_time() records _mock_now, letting a test see the drift clear.
+        utc, local = "2026-07-21T13:00:00", "2026-07-21T09:00:00"
+        if self._mock_now is not None:
+            utc = self._mock_now.strftime("%Y-%m-%dT%H:%M:%S")
+            local = self._mock_now.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%dT%H:%M:%S")
         return {
             "name": "Philips hue", "modelid": "BSB002",
             "bridgeid": "ECB5FAFFFEBF6B24", "ipaddress": self.ip,
             "mac": "ec:b5:fa:bf:6b:24", "swversion": "1969113040",
             "apiversion": "1.65.0", "zigbeechannel": 25,
             "timezone": "America/New_York",
-            "UTC": "2026-07-21T13:00:00", "localtime": "2026-07-21T09:00:00",
+            "UTC": utc, "localtime": local,
             "swupdate2": {"bridge": {"state": "noupdates"}},
             "internetservices": {"internet": "connected"},
             "whitelist": {"a": {"name": "home-control#dev",
@@ -1156,10 +1186,14 @@ class HueSystem(System):
                 out_of_sync = abs((datetime.now(UTC) - bridge_utc).total_seconds()) > CLOCK_DRIFT_WARN
             except ValueError:
                 pass
-        badge = " (out of sync?)" if out_of_sync else ""
-        time_style = "alert" if out_of_sync else ""
-        kv("UTC time", (utc_str or "?").replace("T", " ") + badge, time_style)
-        kv("Local time", cfg.get("localtime", "?").replace("T", " ") + badge, time_style)
+        # When drifted, the local-time row carries the "out of sync?" alert and
+        # the UTC row offers the fix — its hotkey rendered in accent, not red.
+        drift_badge = " (out of sync?)" if out_of_sync else ""
+        sync_hint = " ('t' to push time from local host)" if out_of_sync else ""
+        kv("Local time", cfg.get("localtime", "?").replace("T", " ") + drift_badge,
+           "alert" if out_of_sync else "")
+        kv("UTC time", (utc_str or "?").replace("T", " ") + sync_hint,
+           "hint" if out_of_sync else "")
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
         kv("Internet", cfg.get("internetservices", {}).get("internet", "?"))
 
@@ -1209,6 +1243,8 @@ class HueSystem(System):
                 # A drifted bridge clock silently misfires every schedule the
                 # bridge runs, so it earns "fault" red rather than "warn" amber.
                 region.text(top + i, 0, text, "fault")
+            elif style == "hint":
+                region.text(top + i, 0, text, self.color)
             else:
                 region.text(top + i, 0, text)
 
@@ -1246,6 +1282,7 @@ class HueSystem(System):
     def _sysinfo_toolbar_hints(self) -> Line:
         return hint_row(
             hint("↕/PgUp/PgDn", "scroll", self.color),
+            hint("t", "sync clock", self.color, paren=True),
             hint("b/ESC", "back", self.color),
         )
 
@@ -1514,11 +1551,18 @@ class HueSystem(System):
             self.sysinfo_scroll = max(0, self.sysinfo_scroll - page)
         elif key == curses.KEY_NPAGE:
             self.sysinfo_scroll += page
+        elif key == ord("t"):
+            self._push_time()
         elif key in (ord("b"), 27, ord("q")):
             self.mode = "list"
         else:
             return False
         return True
+
+    def _push_time(self) -> None:
+        ok = self.ctl.push_time()
+        self.set_status("Bridge clock synced to host" if ok else "Clock sync failed")
+        self.sysinfo_lines = self._build_sysinfo_lines()  # re-poll config to reflect it
 
     # -- voice -------------------------------------------------------------
     def voice_actions(self) -> list[VoiceAction]:

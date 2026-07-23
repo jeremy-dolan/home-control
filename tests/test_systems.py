@@ -34,6 +34,35 @@ def test_brightness_bar_shape():
     assert len(_bar_text(mid)) == hue.BAR_WIDTH and _bar_text(mid).count("◉") == 1
 
 
+def test_hue_clock_sync_pushes_host_time(monkeypatch):
+    # The mock config's fixed 2026-07-21 clock is always well past
+    # CLOCK_DRIFT_WARN from "now", so the drift path is live under mock.
+    monkeypatch.setenv("HOME_CONTROL_MOCK", "1")
+    sysm = hue.HueSystem()
+    sysm._open_sysinfo()
+
+    def row(label):
+        return next((t, s) for t, s in sysm.sysinfo_lines if label in t)
+
+    local_text, local_style = row("Local time")
+    utc_text, utc_style = row("UTC time")
+    # Drifted: local row carries the red alert, UTC row offers the accent-coloured fix.
+    assert "(out of sync?)" in local_text and local_style == "alert"
+    assert "'t' to push time from local host" in utc_text and utc_style == "hint"
+    # Local time is shown above UTC time.
+    order = [t for t, _ in sysm.sysinfo_lines]
+    assert order.index(local_text) < order.index(utc_text)
+
+    assert sysm.handle_key(ord("t")) is True
+    assert "synced" in sysm.status().lower()
+
+    # Re-polled config reflects the push: drift and its affordances are gone.
+    local_after, local_style_after = row("Local time")
+    utc_after, _ = row("UTC time")
+    assert "(out of sync?)" not in local_after and local_style_after == ""
+    assert "push time" not in utc_after
+
+
 # --- Sonos -------------------------------------------------------------------
 
 
