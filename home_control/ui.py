@@ -15,8 +15,7 @@ from dataclasses import dataclass
 # ===========================================================================
 # UI conventions
 #
-# The visual language every panel shares. ARCHITECTURE.md carries a one-line
-# overview and points here; this block is the authoritative version.
+# The visual language every panel shares.
 #
 # Drawing. Panels draw only through this module, never raw curses; layout math
 #   lives in layout.py. Each panel is a rounded box (draw_box) bordered and
@@ -62,7 +61,7 @@ from dataclasses import dataclass
 #   identity) and is cleared by selection bolding. muted is a value that is
 #   itself off/absent/inactive and survives it.
 #
-# Primitives & glyphs. level_bar() (unbracketed "━━━◉───", ◉ knob), toggle_dot()
+# Primitives & glyphs. level_bar() (a "━━━◉───" slider, ◉ knob), toggle_dot()
 #   (●/○), hint()/hint_row() (toolbar hints: hotkey brightened + bold, label in
 #   plain accent), justify()/pad_between() (left/right-aligned rows),
 #   select_row() (plain-text selectable row). ● leads a badge ("● ONLINE") and
@@ -230,12 +229,24 @@ def lighten(color: str, t: float = 0.4) -> str:
     instead would desaturate: for an already-saturated accent that yields a paler
     colour rather than a brighter one, leaving the two shades hard to tell apart.
     """
-    if color not in PALETTE:
+    rgb = _lighten_rgb(color, t)
+    if rgb is None:
         return color
+    return rgb_color(*rgb)
+
+
+def _lighten_rgb(color: str, t: float = 0.4) -> tuple[int, int, int] | None:
+    """The pure HSL lift behind `lighten()`: the RGB triple for a palette
+    `color` raised `t` toward full lightness, or None when `color` isn't in the
+    palette. Curses-free, so the accent-headroom invariant is unit-testable —
+    an accent authored with no headroom quantises to the same 256-cube index as
+    its base and the two shades render as one."""
+    if color not in PALETTE:
+        return None
     r, g, b = (c / 255 for c in _hex_rgb(PALETTE[color]))
     h, lum, s = colorsys.rgb_to_hls(r, g, b)
     r, g, b = colorsys.hls_to_rgb(h, lum + (1 - lum) * t, s)
-    return rgb_color(round(r * 255), round(g * 255), round(b * 255))
+    return round(r * 255), round(g * 255), round(b * 255)
 
 
 # Status-badge states. Every panel leads its collapsed line (and its expanded
@@ -459,7 +470,13 @@ def highlight(line: Line, accent: str) -> Line:
     text was only bolded ends up half-highlighted — the slider moves, the ``● ON``
     beside it doesn't. Callers therefore build rows with the *base* accent
     throughout and let this do the lifting. Segments marked ``lift=False`` — the
-    ▶ cursor — keep their own colour. Mutates and returns the same list.
+    ▶ cursor — keep their own colour.
+
+    Mutates and returns the *same* ``Seg`` objects, so pass a freshly built row
+    each frame: applied twice (or to a cached/shared ``Line``) it compounds —
+    the second pass sees dim already cleared and the accent already lifted, so
+    an un-selected row that reused those segments would stay bright. Panels
+    rebuild their rows every render, which is what keeps this safe.
     """
     bright = lighten(accent)
     for s in line:
