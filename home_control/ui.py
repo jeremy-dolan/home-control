@@ -197,15 +197,13 @@ def badge_color(state: str, accent: str) -> str:
     return {BADGE_ACTIVE: accent, BADGE_IDLE: "muted"}.get(state, "fault")
 
 
-def attr(color: str = "", *, bold: bool = False, dim: bool = False, reverse: bool = False) -> int:
+def attr(color: str = "", *, bold: bool = False, dim: bool = False) -> int:
     """Build a curses attribute from a color name + flags."""
     a = curses.color_pair(_PAIRS.get(color, 0))
     if bold:
         a |= curses.A_BOLD
     if dim:
         a |= curses.A_DIM
-    if reverse:
-        a |= curses.A_REVERSE
     return a
 
 
@@ -222,7 +220,6 @@ class Seg:
     color: str = ""
     bold: bool = False
     dim: bool = False
-    reverse: bool = False
     # False pins this run to its own colour when the row is selected, exempting
     # it from highlight()'s accent lift. The ▶ cursor uses it: it is already the
     # thing marking the row, so brightening it too says nothing extra.
@@ -260,18 +257,10 @@ def seg_len(line: Line) -> int:
     return sum(len(s.text) for s in line)
 
 
-def justify(left: Line, right: Line, width: int, *, reverse: bool = False) -> Line:
-    """Combine left + right styled runs with a space pad so right hugs the edge.
-
-    If `reverse`, every segment (including the pad) is drawn reversed — used to
-    highlight a selected row across its full width.
-    """
+def justify(left: Line, right: Line, width: int) -> Line:
+    """Combine left + right styled runs with a space pad so right hugs the edge."""
     gap = max(1, width - seg_len(left) - seg_len(right))
-    out: Line = [*left, Seg(" " * gap), *right]
-    if reverse:
-        for s in out:
-            s.reverse = True
-    return out
+    return [*left, Seg(" " * gap), *right]
 
 
 def hint(key: str, label: str, color: str, *, paren: bool = False, key_color: str | None = None) -> Line:
@@ -335,7 +324,7 @@ class Region:
         self.width = width
 
     def text(self, row: int, col: int, s: str, color: str = "", *, bold: bool = False,
-             dim: bool = False, reverse: bool = False) -> int:
+             dim: bool = False) -> int:
         """Write a string at (row, col) within the region. Returns next free col."""
         if not (0 <= row < self.height) or col >= self.width:
             return col
@@ -348,7 +337,7 @@ class Region:
         s = s[:avail]
         try:
             self.stdscr.addstr(self.top + row, self.left + col, s,
-                               attr(color, bold=bold, dim=dim, reverse=reverse))
+                               attr(color, bold=bold, dim=dim))
         except curses.error:
             pass
         return col + len(s)
@@ -376,8 +365,7 @@ class Region:
     def segs(self, row: int, line: Line, col: int = 0) -> None:
         """Write a list of styled segments on a single row."""
         for seg in line:
-            col = self.text(row, col, seg.text, seg.color,
-                            bold=seg.bold, dim=seg.dim, reverse=seg.reverse)
+            col = self.text(row, col, seg.text, seg.color, bold=seg.bold, dim=seg.dim)
             if col >= self.width:
                 break
 

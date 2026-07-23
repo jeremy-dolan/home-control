@@ -1018,7 +1018,7 @@ class SonosSystem(System):
         if f.kind == "sep":
             region.text(row, 0, "─" * region.width, dim=True)
             return
-        # Selection cue: accent ▶ cursor + bold label (no reverse video).
+        # Selection cue: accent ▶ cursor + bold label.
         region.text(row, 0, "▶ " if sel else "  ", self.color if sel else "", bold=sel)
         region.text(row, 2, f"{f.label:<16}", "" if sel else self.color, bold=sel)
         if f.kind == "info":
@@ -1048,8 +1048,8 @@ class SonosSystem(System):
         if track and track.title and used < width:
             t = track.title + (f"  —  {track.artist}" if track.artist else "")
             segs.append(Seg(trunc(t, width - used), dim=True))
-        # Selection cue: bold the row and lift its accent segments (no reverse
-        # video) — the badge and bar brighten together with the cursor.
+        # Selection cue: bold the row and lift its accent segments — the badge
+        # and bar brighten together with the cursor.
         return highlight(segs, self.color) if active else segs
 
     def _render_queue(self, region: Region) -> None:
