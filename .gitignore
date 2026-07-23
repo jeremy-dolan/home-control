@@ -8,18 +8,14 @@ __pycache__/
 build/
 dist/
 .DS_Store
-# Editor swap/backup files
-*.swp
-*.swo
-*~
-# Claude Code: ignore machine-local state (permission grants, agent worktrees)
+.*.sw[a-p]
+
+# Claude Code: ignore local state/scratch (permission grants, agent worktrees)
 /.claude/*
 # ...but share skills/settings
 !/.claude/skills/
 !/.claude/settings.json
 
 # Prototype/scratch trees not part of the shipped package
-/dev/
 /standalone-apps/
-/plugins/
-/README.ideas
+*.untracked
