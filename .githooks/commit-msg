@@ -16,8 +16,13 @@ note() {
     echo "  $1" >&2
 }
 
-# Strip comments; git appends the status block as '#' lines.
-mapfile -t lines < <(grep -v '^#' "$msg_file")
+# Cut at the scissors first: under `commit.verbose` the diff below it is not
+# comment-prefixed, and git discards it anyway. Then strip comments; git
+# appends the status block as '#' lines.
+mapfile -t lines < <(
+    sed '/^#[[:blank:]]*-\+[[:blank:]]*>8[[:blank:]]*-\+[[:blank:]]*$/,$d' "$msg_file" |
+        grep -v '^#'
+)
 
 subject=""
 for line in "${lines[@]}"; do
