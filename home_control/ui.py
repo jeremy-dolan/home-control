@@ -12,6 +12,65 @@ import curses
 import textwrap
 from dataclasses import dataclass
 
+# ===========================================================================
+# UI conventions
+#
+# The visual language every panel shares. ARCHITECTURE.md carries a one-line
+# overview and points here; this block is the authoritative version.
+#
+# Drawing. Panels draw only through this module, never raw curses; layout math
+#   lives in layout.py. Each panel is a rounded box (draw_box) bordered and
+#   titled in its system accent, its interior a clipped Region (an 80-column
+#   terminal yields a 76-column interior). The focused panel expands to fill
+#   leftover height and brightens its border; the rest stay collapsed. Design
+#   for 80 columns.
+#
+# Colour. One PALETTE, authored as RGB hex for a 256-colour terminal — below
+#   that every name falls through to the default foreground (no 8-colour
+#   variant by design; layout, weight, cursors and glyphs carry the UI without
+#   hue). Entries are semantic roles that mean the same in any panel — warn
+#   (working, wants attention), fault (unreachable/failed), muted (a value that
+#   is itself off/absent), info (neutral secondary series) — plus one base
+#   accent per system in SYSTEM_COLORS. Accent is chrome only (borders, cursors,
+#   hotkeys, section headers, bars); body text stays the terminal default.
+#
+# Accents are base shades. lighten(accent) raises HSL lightness (holding hue
+#   and saturation) for the brighter form used by hotkeys, focused borders and
+#   selected rows — A_BOLD can't brighten a 256-colour pair. Author accents with
+#   headroom; one near the top of its lightness range makes the two shades read
+#   as one.
+#
+# Badges. Every panel leads its collapsed line and expanded header with a
+#   "● LABEL" badge, coloured by badge_color(state, accent): BADGE_ACTIVE ->
+#   accent + bold (doing its job), BADGE_IDLE -> muted (reachable but
+#   off/stopped), BADGE_FAULT -> fault. An item going unreachable (one light,
+#   one AC unit) is IDLE; FAULT is reserved for a whole panel's device being
+#   unreachable. Pad the label to a fixed width so the column after it doesn't
+#   shift as the state changes.
+#
+# Selection. cursor(accent, sel) — an accent "▶ " when selected, else two
+#   blanks — is the guaranteed cue and owns the leading two columns of every
+#   selectable row. highlight(line, accent) is optional reinforcement (bold
+#   every segment, clear dim, lift accent segments to
+#   lighten(accent)), used by dense scrolling lists (Hue, Sonos) and
+#   deliberately not by card layouts (Midea, whose _dim already means
+#   off/unreachable, so row-bold would collide). Seg(lift=False) opts a segment
+#   out of the lift; the cursor uses it, so the marker stays base while the row
+#   it marks brightens.
+#
+# dim vs muted. dim=True is secondary/supporting text (labels, hints, static
+#   identity) and is cleared by selection bolding. muted is a value that is
+#   itself off/absent/inactive and survives it.
+#
+# Primitives & glyphs. level_bar() (unbracketed "━━━◉───", ◉ knob), toggle_dot()
+#   (●/○), hint()/hint_row() (toolbar hints: hotkey brightened + bold, label in
+#   plain accent), justify()/pad_between() (left/right-aligned rows),
+#   select_row() (plain-text selectable row). ● leads a badge ("● ONLINE") and
+#   trails a toggle ("Eco ●"); ◉ is only the level-bar knob. Box chrome is
+#   rounded (╭╮╰╯); square corners (┌┐└┘) are reserved for content nested inside
+#   a panel (Roku's input boxes) — a deliberate content-vs-chrome cue.
+# ===========================================================================
+
 
 def wrap(text: str, width: int, max_lines: int | None = None) -> list[str]:
     """Word-wrap `text` to `width` columns, returning a list of lines.
@@ -37,7 +96,7 @@ def wrap(text: str, width: int, max_lines: int | None = None) -> list[str]:
 # the palette is left unallocated and every name renders in the terminal's
 # default foreground: there is deliberately no hand-tuned 8-color variant, since
 # layout, bold/dim weight, cursors and badge glyphs already carry the UI without
-# hue. See "UI conventions" in ARCHITECTURE.md.
+# hue. See the "UI conventions" block at the top of this module.
 PALETTE = {
     # -- Semantic roles: what a color *means*, in any panel. ----------------
     "warn":  "#E3B341",  # working, but wants attention (filter due, error code)
@@ -375,9 +434,9 @@ class Region:
 
 def cursor(accent: str, sel: bool) -> Seg:
     """The leading two columns of a selectable row: an accent ▶ when selected, two
-    blanks otherwise. The app never uses reverse video to mark a selection — the
-    cursor plus bolding the row does that job (see "UI conventions" in
-    ARCHITECTURE.md), so every list builds its rows starting with this Seg."""
+    blanks otherwise. The cursor plus bolding the row marks a selection (see the
+    "UI conventions" block at the top of this module), so every list builds its
+    rows starting with this Seg."""
     return Seg("▶ ", accent, bold=True, lift=False) if sel else Seg("  ")
 
 
