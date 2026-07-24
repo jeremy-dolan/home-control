@@ -850,6 +850,7 @@ class HueController:
             "swupdate2": {"bridge": {"state": "noupdates"}},
             "internetservices": {"internet": "connected"},
             "whitelist": {"a": {"name": "home-control#dev",
+                                "create date": "2026-05-01T12:00:00",
                                 "last use date": "2026-06-16T12:00:00"}},
         }
 
@@ -1208,16 +1209,19 @@ class HueSystem(System):
 
         apps = []
         for _wid, wd in cfg.get("whitelist", {}).items():
+            created = wd.get("create date", "?")
+            if created and "T" in created:
+                created = created.split("T")[0]
             last = wd.get("last use date", "?")
             if last and "T" in last:
                 last = last.split("T")[0]
-            apps.append((wd.get("name", "?"), last))
-        apps.sort(key=lambda x: x[1], reverse=True)
+            apps.append((wd.get("name", "?"), created, last))
+        apps.sort(key=lambda x: x[2], reverse=True)
         if apps:
             lines.append(("", ""))
             lines.append((f"CONNECTED APPS ({len(apps)})", "header"))
-            for name, last in apps:
-                lines.append((f"  {name[:30].ljust(30)}  {last}", ""))
+            for name, created, last in apps:
+                lines.append((f"  {name[:30].ljust(30)}  created {created.ljust(10)}  used {last}", ""))
         return lines
 
     def _render_sysinfo(self, region: Region) -> None:
