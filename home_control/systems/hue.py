@@ -1186,14 +1186,13 @@ class HueSystem(System):
                 out_of_sync = abs((datetime.now(UTC) - bridge_utc).total_seconds()) > CLOCK_DRIFT_WARN
             except ValueError:
                 pass
-        # When drifted, the local-time row carries the "out of sync?" alert and
-        # the UTC row offers the fix — its hotkey rendered in accent, not red.
+        # A drift pairs two alert rows in the same red: the local-time row
+        # names the fault ("out of sync?"), the UTC row offers the fix.
         drift_badge = " (out of sync?)" if out_of_sync else ""
-        sync_hint = " ('t' to push time from local host)" if out_of_sync else ""
-        kv("Local time", cfg.get("localtime", "?").replace("T", " ") + drift_badge,
-           "alert" if out_of_sync else "")
-        kv("UTC time", (utc_str or "?").replace("T", " ") + sync_hint,
-           "hint" if out_of_sync else "")
+        sync_hint = " ('s' to sync local host time)" if out_of_sync else ""
+        alert = "alert" if out_of_sync else ""
+        kv("Local time", cfg.get("localtime", "?").replace("T", " ") + drift_badge, alert)
+        kv("UTC time", (utc_str or "?").replace("T", " ") + sync_hint, alert)
         kv("Updates", cfg.get("swupdate2", {}).get("bridge", {}).get("state", "?"))
         kv("Internet", cfg.get("internetservices", {}).get("internet", "?"))
 
@@ -1243,8 +1242,6 @@ class HueSystem(System):
                 # A drifted bridge clock silently misfires every schedule the
                 # bridge runs, so it earns "fault" red rather than "warn" amber.
                 region.text(top + i, 0, text, "fault")
-            elif style == "hint":
-                region.text(top + i, 0, text, self.color)
             else:
                 region.text(top + i, 0, text)
 
@@ -1282,7 +1279,7 @@ class HueSystem(System):
     def _sysinfo_toolbar_hints(self) -> Line:
         return hint_row(
             hint("↕/PgUp/PgDn", "scroll", self.color),
-            hint("t", "sync clock", self.color, paren=True),
+            hint("s", "sync time", self.color, paren=True),
             hint("b/ESC", "back", self.color),
         )
 
@@ -1551,7 +1548,7 @@ class HueSystem(System):
             self.sysinfo_scroll = max(0, self.sysinfo_scroll - page)
         elif key == curses.KEY_NPAGE:
             self.sysinfo_scroll += page
-        elif key == ord("t"):
+        elif key == ord("s"):
             self._push_time()
         elif key in (ord("b"), 27, ord("q")):
             self.mode = "list"

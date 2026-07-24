@@ -46,14 +46,14 @@ def test_hue_clock_sync_pushes_host_time(monkeypatch):
 
     local_text, local_style = row("Local time")
     utc_text, utc_style = row("UTC time")
-    # Drifted: local row carries the red alert, UTC row offers the accent-coloured fix.
+    # Drifted: both rows share the red alert — one names the fault, one the fix.
     assert "(out of sync?)" in local_text and local_style == "alert"
-    assert "'t' to push time from local host" in utc_text and utc_style == "hint"
+    assert "'s' to sync local host time" in utc_text and utc_style == "alert"
     # Local time is shown above UTC time.
     order = [t for t, _ in sysm.sysinfo_lines]
     assert order.index(local_text) < order.index(utc_text)
 
-    assert sysm.handle_key(ord("t")) is True
+    assert sysm.handle_key(ord("s")) is True
     assert "synced" in sysm.status().lower()
 
     # Re-polled config reflects the push: drift and its affordances are gone.
