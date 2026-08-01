@@ -110,6 +110,7 @@ class RokuDevice:
 class RokuMedia:
     state: str = ""      # play | pause | close | stop | none
     app: str = ""        # foreground app name
+    home: bool = False   # foreground "app" is the Roku's own menu, not a channel
     position: str = ""   # "m:ss"
     duration: str = ""   # "m:ss"
 
@@ -193,11 +194,16 @@ class RokuController:
                 if self.fail_count >= RECONNECT_GRACE:
                     self.connected = False
             return
-        app_name = ""
+        app_name, home = "", False
         if active is not None:
             app = active.find("app")
             if app is not None:
                 app_name = app.text or ""
+                # The home screen names itself "Roku Dynamic Menu" (and varies by
+                # firmware); type="home" is the stable signal. Say it shorter.
+                home = app.get("type") == "home"
+                if home:
+                    app_name = "Roku Menu"
         state, pos, dur = "", "", ""
         if media is not None:
             state = media.get("state", "")
@@ -208,7 +214,7 @@ class RokuController:
             dur = _fmt_ms(media.findtext("duration"))
         with self._lock:
             self.fail_count = 0
-            self.media = RokuMedia(state=state, app=app_name, position=pos, duration=dur)
+            self.media = RokuMedia(state=state, app=app_name, home=home, position=pos, duration=dur)
 
     # -- discovery (SSDP) --------------------------------------------------
     def _discover(self) -> str | None:
@@ -505,7 +511,7 @@ class RokuSystem(System):
         detail = media.app or self.ctl.device.name or ""
         # Same badge grammar as Router's "● ONLINE" / Lighting's "● CONNECTED".
         return [[Seg(label, badge_color(state, self.color), bold=state == BADGE_ACTIVE),
-                 Seg("    " + detail)]]
+                 Seg("    " + detail, dim=media.home)]]
 
     # -- expanded ----------------------------------------------------------
     def render_expanded(self, region: Region) -> None:
