@@ -91,8 +91,9 @@ _ASLEEP_MODES = {"Suspend", "Ready", "Headless"}
 
 # Widest badge label, so the column after it doesn't shift as the state changes,
 # and the column the collapsed line and the expanded header both start detail in.
+# BADGE_W + 2 matches Sonos, so the two panels' status lines line up.
 BADGE_W = len("▶ PLAYING")
-DETAIL_COL = 12
+DETAIL_COL = BADGE_W + 2
 
 # Voice button name -> ECP keypress.
 _VOICE_KEYS = {

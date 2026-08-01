@@ -18,8 +18,9 @@ see also: https://chatgpt.com/c/6a56a686-1e48-83ea-8eff-301762040029
 ## Roku badge work
 
 Mostly done. Badge labels now pad to `BADGE_W` and both the collapsed line and
-the expanded header start their detail at `DETAIL_COL` (12), so the column no
-longer shifts between `▶ PLAYING` / `⏸ PAUSED` / `■ IDLE` / `● ASLEEP`.
+the expanded header start their detail at `DETAIL_COL` (`BADGE_W + 2` = 11,
+matching Sonos), so the column no longer shifts between `▶ PLAYING` /
+`⏸ PAUSED` / `■ IDLE` / `● ASLEEP`, and the two panels line up with each other.
 "Roku Dynamic Menu" is rewritten as "Roku Menu", detected via the active-app
 `type="home"` attribute rather than the display string (which varies by
 firmware).
