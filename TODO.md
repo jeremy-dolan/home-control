@@ -37,6 +37,15 @@ hiding by using IDLE as a default.
 Also should substitute "Roku Dynamic Menu" for something less branded and
 wordy. Maybe "Home"?
 
+## Block find_remote when the device says it can't
+
+`/query/device-info` reports `supports-find-remote: true` next to
+`find-remote-is-possible: false` (live Roku Ultra, 2026-08-01) — the second is
+the one that matters, and it's the one we don't read. The `find_remote` voice
+action fires the ECP keypress regardless, so it silently does nothing and
+reports success. Gate the action on `find-remote-is-possible` and say why it
+can't run instead of pretending it worked.
+
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
 for in-app help vs. README.md
