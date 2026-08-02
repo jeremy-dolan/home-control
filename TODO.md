@@ -17,21 +17,23 @@ see also: https://chatgpt.com/c/6a56a686-1e48-83ea-8eff-301762040029
 
 ## Roku badge work
 
-Mostly done. Badge labels now pad to `BADGE_W` and both the collapsed line and
-the expanded header start their detail at `DETAIL_COL` (`BADGE_W + 2` = 11,
+Done: badge labels pad to `BADGE_W` and both the collapsed line and the
+expanded header start their detail at `DETAIL_COL` (`BADGE_W + 2` = 11,
 matching Sonos), so the column no longer shifts between `▶ PLAYING` /
 `⏸ PAUSED` / `■ IDLE` / `● ASLEEP`, and the two panels line up with each other.
 "Roku Dynamic Menu" is rewritten as "Roku Menu", detected via the active-app
 `type="home"` attribute rather than the display string (which varies by
 firmware).
 
-On the "what are the unknown states we hide behind IDLE?" question: an idle
-player reports `state="close"` (live, OS 15.3.4) — that's the common one.
-Roku documents `none`, `startup`, `buffer`, `play`, `pause`, `finished`,
-`stopped`, and `error` besides; none observed live yet, so it's still an open
-question whether any deserves its own badge (`buffer` → a LOADING badge like
-Sonos's `⟳` is the likely candidate). Note that standby turned out *not* to be
-one of these — it's a separate `power-mode` axis, now handled.
+Still open: which media-player states deserve a badge of their own. An idle
+player reports `state="close"` (live, OS 15.3.4) and that is the only state
+observed so far; Roku also documents `none`, `startup`, `buffer`, `play`,
+`pause`, `finished`, `stopped`, and `error`, and `badge()` funnels every
+unobserved one into `■ IDLE`. Two look wrong there: `buffer` is active work and
+wants a LOADING badge like Sonos's `⟳`, and `error` renders as a calm IDLE
+rather than FAULT. Confirming either needs live observation of a state we can't
+trigger on demand. (Standby turned out *not* to be one of these — it's a
+separate `power-mode` axis, now handled.)
 
 ## Block find_remote when the device says it can't
 
