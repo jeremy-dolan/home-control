@@ -29,7 +29,8 @@ from dataclasses import dataclass
 #   variant by design; layout, weight, cursors and glyphs carry the UI without
 #   hue). Entries are semantic roles that mean the same in any panel — warn
 #   (working, wants attention), fault (unreachable/failed), muted (a value that
-#   is itself off/absent), info (neutral secondary series) — plus one base
+#   is itself off/absent), info (neutral secondary series), neutral/neutral_dim
+#   (hueless chrome for UI the shell owns rather than a device) — plus one base
 #   accent per system in SYSTEM_COLORS. Accent is chrome only (borders, cursors,
 #   hotkeys, section headers, bars); body text stays the terminal default.
 #
@@ -101,7 +102,19 @@ PALETTE = {
     "warn":  "#E3B341",  # working, but wants attention (filter due, error code)
     "fault": "#F85149",  # unreachable, offline, failed
     "muted": "#8A8A8A",  # a value that is itself off/absent/inactive
-    "info":  "#39C5CF",  # neutral secondary series (voice chrome, upload chart)
+    "info":  "#39C5CF",  # neutral secondary series (upload chart)
+
+    # Hueless chrome for UI that belongs to no system — the voice overlay floats
+    # above every panel, so an accent would imply it acts on that one device.
+    # White reads as "the shell is asking", and the dim shade keeps the overlay's
+    # key hints below its border in the same way an accent's base sits below
+    # lighten()'s bright form.
+    #
+    # `neutral` is deliberately the one role with no lighten() headroom: the
+    # overlay is always drawn focused, so the lift is a no-op and the border
+    # stays pure white.
+    "neutral":     "#FFFFFF",
+    "neutral_dim": "#9E9E9E",
 
     # -- System accents: which panel this is. -------------------------------
     # Each is the panel's *base* shade; lighten() derives the brighter one used
