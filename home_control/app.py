@@ -12,7 +12,7 @@ from pathlib import Path
 from . import layout
 from .poller import Poller
 from .systems import System, build_systems
-from .ui import Line, Region, Seg, attr, draw_box, hint, hint_row, init_colors, seg_len
+from .ui import Line, Region, Seg, attr, backdrop, draw_box, hint, hint_row, init_colors, seg_len
 from .voice import VoiceController
 
 # Cap drawn width so boxes don't sprawl on very wide terminals.
@@ -23,10 +23,12 @@ MAX_WIDTH = 100
 # SPACE falls through to it as a typed character.
 VOICE_KEY = ord(" ")
 
-# Fixed geometry for the Voice box: sized to fit the input-mode prompt, then
-# held constant across every mode so the box doesn't resize as the dialogue
-# progresses from listening -> thinking -> result.
-VOICE_CONTENT_W = 46
+# Fixed geometry for the Voice box, held constant across every mode so the box
+# doesn't resize as the dialogue progresses from listening -> thinking ->
+# result. The width is the longest example plus its two-space indent and
+# quotes; body lines are clipped to it in `_render_voice`, so a longer phrase
+# than the width allows loses its tail silently.
+VOICE_CONTENT_W = 44
 VOICE_BODY_LINES = 8
 
 # Static sample phrases shown in the box so a new user sees the kind of
@@ -106,26 +108,30 @@ class Shell:
         collapsed_heights = [s.collapsed_height for s in self.systems]
         slots = layout.compute_layout(collapsed_heights, self.focused, h)
 
-        focused_slot = slots[0]
-        for slot in slots:
-            system = self.systems[slot.index]
-            region = draw_box(stdscr, slot.top, 0, slot.height, width,
-                              system.name, system.color, focused=slot.focused)
-            if slot.focused:
-                focused_slot = slot
-            if region.height <= 0:
-                continue
-            if slot.focused:
-                self._render_focused(stdscr, system, region)
-            else:
-                for i, line in enumerate(system.collapsed_lines(region.width)):
-                    region.segs(i, line)
+        popup_sys = self._popup_system()
+        overlaid = self.show_help or popup_sys is not None or self.voice.active()
 
-        self._render_status_line(stdscr, h, w)
-        self._render_global_toolbar(stdscr, h, w)
+        focused_slot = slots[0]
+        with backdrop(overlaid):
+            for slot in slots:
+                system = self.systems[slot.index]
+                region = draw_box(stdscr, slot.top, 0, slot.height, width,
+                                  system.name, system.color, focused=slot.focused)
+                if slot.focused:
+                    focused_slot = slot
+                if region.height <= 0:
+                    continue
+                if slot.focused:
+                    self._render_focused(stdscr, system, region)
+                else:
+                    for i, line in enumerate(system.collapsed_lines(region.width)):
+                        region.segs(i, line)
+
+            self._render_status_line(stdscr, h, w)
+            self._render_global_toolbar(stdscr, h, w)
+
         if self.show_help:
             self._render_help(stdscr, h, w, focused_slot)
-        popup_sys = self._popup_system()
         if popup_sys is not None:
             self._render_popup(stdscr, h, w, popup_sys)
         if self.voice.active():
@@ -197,7 +203,7 @@ class Shell:
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
         mode, buffer, message, _is_error = self.voice.snapshot()
-        color, hint_color = "neutral", "neutral_dim"
+        color = "info_teal"
         mid = VOICE_BODY_LINES // 2
         # Static sample phrases, shown while the dialogue is still waiting for
         # a command so the user sees what's possible without asking the model.
@@ -205,8 +211,7 @@ class Shell:
         if mode == "input":
             body = ["Listening...", "", *hints, "", "> " + buffer + "_"]
             dim_rows: set[int] = {0} | set(range(2, 2 + len(hints)))
-            hint_line: Line = hint_row(
-                hint("ENTER", "send", hint_color), hint("ESC", "cancel", hint_color), sep="    ")
+            hint_line: Line = hint_row(hint("ENTER", "send", color), hint("ESC", "cancel", color), sep="    ")
         elif mode == "listening":
             body = ["Listening...", "", *hints]
             dim_rows = {0} | set(range(2, 2 + len(hints)))

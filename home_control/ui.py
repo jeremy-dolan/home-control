@@ -10,6 +10,8 @@ from __future__ import annotations
 import colorsys
 import curses
 import textwrap
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 # ===========================================================================
@@ -29,8 +31,8 @@ from dataclasses import dataclass
 #   variant by design; layout, weight, cursors and glyphs carry the UI without
 #   hue). Entries are semantic roles that mean the same in any panel — warn
 #   (working, wants attention), fault (unreachable/failed), muted (a value that
-#   is itself off/absent), info (neutral secondary series), neutral/neutral_dim
-#   (hueless chrome for UI the shell owns rather than a device) — plus one base
+#   is itself off/absent), info_teal/info_green (neutral secondary series,
+#   two so one panel can carry two at once) — plus one base
 #   accent per system in SYSTEM_COLORS. Accent is chrome only (borders, cursors,
 #   hotkeys, section headers, bars); body text stays the terminal default.
 #
@@ -39,6 +41,14 @@ from dataclasses import dataclass
 #   selected rows — A_BOLD can't brighten a 256-colour pair. Author accents with
 #   headroom; one near the top of its lightness range makes the two shades read
 #   as one.
+#
+# Popups. While a popup is open (help, a modal alert, the voice overlay) the
+#   panels behind it are re-drawn dimmed by backdrop() — each colour keeps its
+#   hue and is scaled toward the background, so a backgrounded panel still
+#   reads as itself while the popup is the only thing at full strength. Panels
+#   do nothing to opt in: the substitution happens in attr(), which every draw
+#   already goes through. Draw a popup *outside* the backdrop() block or it
+#   dims with its backdrop.
 #
 # Badges. Every panel leads its collapsed line and expanded header with a
 #   "● LABEL" badge, coloured by badge_color(state, accent): BADGE_ACTIVE ->
@@ -105,19 +115,11 @@ PALETTE = {
     "warn":  "#E3B341",  # working, but wants attention (filter due, error code)
     "fault": "#F85149",  # unreachable, offline, failed
     "muted": "#8A8A8A",  # a value that is itself off/absent/inactive
-    "info":  "#39C5CF",  # neutral secondary series (upload chart)
-
-    # Hueless chrome for UI that belongs to no system — the voice overlay floats
-    # above every panel, so an accent would imply it acts on that one device.
-    # White reads as "the shell is asking", and the dim shade keeps the overlay's
-    # key hints below its border in the same way an accent's base sits below
-    # lighten()'s bright form.
-    #
-    # `neutral` is deliberately the one role with no lighten() headroom: the
-    # overlay is always drawn focused, so the lift is a no-op and the border
-    # stays pure white.
-    "neutral":     "#FFFFFF",
-    "neutral_dim": "#9E9E9E",
+    # Neutral secondary series — a colour for something that needs to stand
+    # apart without claiming to be a device. Two of them, so a panel can carry
+    # two series at once (the Router charts) and still read as one family.
+    "info_teal":  "#39C5CF",
+    "info_green": "#00C300",  # picked to pop: where ANSI 32 lands on a stock xterm
 
     # -- System accents: which panel this is. -------------------------------
     # Each is the panel's *base* shade; lighten() derives the brighter one used
@@ -143,7 +145,9 @@ SYSTEM_COLORS = {
 }
 
 _PAIRS: dict[str, int] = {}
-_next_pair = 1  # next free curses pair slot; set at the end of init_colors()
+_next_pair = 1   # next free curses pair number
+_next_slot = 16  # next free colour slot to redefine (base ANSI 0-15 left alone)
+_can_change = False  # terminal supports init_color, so colours can be exact
 _dynamic_names: set[str] = set()  # lazily-allocated RGB pairs, cleared on re-init
 
 # xterm-256 color cube levels, for nearest-color fallback.
@@ -156,10 +160,26 @@ def _hex_rgb(h: str) -> tuple[int, int, int]:
 
 
 def _nearest_256(r: int, g: int, b: int) -> int:
-    """Map an RGB triple to the closest xterm-256 color-cube index."""
+    """Map an RGB triple to the closest xterm-256 color, cube or greyscale ramp.
+
+    The 6x6x6 cube's grey diagonal has only six steps, so a near-grey snapping
+    to the cube alone quantises brutally — the backdrop's ten grey levels
+    collapsed to two before the 232-255 ramp was considered here. The ramp is 24
+    steps of 10, and losing to the cube whenever the cube has an exact match, so
+    adding it strictly improves the fit and leaves every existing cube colour
+    where it was.
+    """
     def lvl(v: int) -> int:
         return min(range(6), key=lambda i: abs(_CUBE[i] - v))
-    return 16 + 36 * lvl(r) + 6 * lvl(g) + lvl(b)
+
+    cube = 16 + 36 * lvl(r) + 6 * lvl(g) + lvl(b)
+    cube_err = sum((_CUBE[lvl(v)] - v) ** 2 for v in (r, g, b))
+
+    k = min(range(24), key=lambda i: abs(8 + 10 * i - (r + g + b) / 3))
+    grey = 8 + 10 * k
+    grey_err = sum((grey - v) ** 2 for v in (r, g, b))
+
+    return 232 + k if grey_err < cube_err else cube
 
 
 def init_colors() -> None:
@@ -168,69 +188,188 @@ def init_colors() -> None:
     On a terminal with fewer than 256 colors nothing is allocated, so every name
     falls through to the default foreground in `attr()`.
     """
-    global _next_pair
+    global _next_pair, _next_slot, _can_change
     curses.start_color()
     curses.use_default_colors()
     _PAIRS.clear()
     _PAIRS[""] = 0  # default terminal color
     _dynamic_names.clear()
+    _backdrop_names.clear()  # receded names point at pairs about to be re-allocated
     _next_pair = 1
+    _next_slot = 16  # leave the 16 base ANSI slots untouched
+    _can_change = False
 
     n_colors = getattr(curses, "COLORS", 0)
     if n_colors < 256:
         return
     try:
-        can_change = curses.can_change_color()
+        _can_change = curses.can_change_color()
     except curses.error:
-        can_change = False
+        _can_change = False
 
-    pair = 1
-    custom_slot = 16  # leave the 16 base ANSI slots untouched
     for name, hexv in PALETTE.items():
-        r, g, b = _hex_rgb(hexv)
-        fg = _nearest_256(r, g, b)
-        if can_change and 16 <= custom_slot < n_colors:
-            try:
-                curses.init_color(custom_slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
-                fg = custom_slot
-                custom_slot += 1
-            except curses.error:
-                pass
-        try:
-            curses.init_pair(pair, fg, -1)
-        except curses.error:
-            continue  # out of pair slots: this name renders in the default color
-        _PAIRS[name] = pair
-        pair += 1
+        _PAIRS[name] = _alloc(*_hex_rgb(hexv))
 
-    # Dynamic RGB pairs (rgb_color) re-register lazily above the fixed palette.
-    _next_pair = pair
+
+def _alloc(r: int, g: int, b: int) -> int:
+    """Allocate a curses pair rendering ``(r, g, b)``, returning its pair number.
+
+    Where the terminal can redefine colors, this claims the next free slot and
+    sets it to the exact RGB — palette roles and dynamic colors draw from the
+    same slot counter, so no two colors can ever be handed the same slot.
+
+    Only where it *can't* does the triple snap to the nearest stock cube color,
+    and there the snap is safe precisely because nothing has been redefined: an
+    index means what the terminal says it means. Mixing the two — snapping to a
+    stock index on a terminal where slots have been redefined — is what makes a
+    dark colour come back as some unrelated palette hue at full brightness.
+
+    Returns pair 0 (the default foreground) once slots or pairs run out.
+    """
+    global _next_pair, _next_slot
+    if _next_pair >= getattr(curses, "COLOR_PAIRS", 256):
+        return 0
+    fg = _nearest_256(r, g, b)
+    if _can_change and _next_slot < getattr(curses, "COLORS", 0):
+        try:
+            curses.init_color(_next_slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
+            fg = _next_slot
+            _next_slot += 1
+        except curses.error:
+            pass
+    try:
+        curses.init_pair(_next_pair, fg, -1)
+    except curses.error:
+        return 0
+    _next_pair += 1
+    return _next_pair - 1
 
 
 def rgb_color(r: int, g: int, b: int) -> str:
-    """Return a Seg/attr color name that renders approximately ``(r, g, b)``.
+    """Return a Seg/attr color name that renders ``(r, g, b)``.
 
-    The triple is mapped to the nearest xterm-256 cube color and a curses pair is
-    allocated for it on first use (cached, so repeated colors share one pair).
-    Falls back to the default foreground when the terminal lacks 256 colors or
-    pair slots run out. Must be called after init_colors() (i.e. during
-    rendering)."""
-    global _next_pair
+    Exact where the terminal can redefine colors, nearest-stock-cube where it
+    can't. The pair is allocated on first use and cached under the RGB triple,
+    so repeated colors share one pair. Falls back to the default foreground when
+    the terminal lacks 256 colors or slots/pairs run out. Must be called after
+    init_colors() (i.e. during rendering).
+    """
     if getattr(curses, "COLORS", 0) < 256:
         return ""
-    idx = _nearest_256(r, g, b)
-    name = f"x256:{idx}"
+    name = f"rgb:{r},{g},{b}"
     if name in _PAIRS:
         return name
-    if _next_pair >= getattr(curses, "COLOR_PAIRS", 256):
+    pair = _alloc(r, g, b)
+    if pair == 0:
         return ""
-    try:
-        curses.init_pair(_next_pair, idx, -1)
-    except curses.error:
-        return ""
-    _PAIRS[name] = _next_pair
+    _PAIRS[name] = pair
     _dynamic_names.add(name)
-    _next_pair += 1
+    return name
+
+
+# --- backdrop dimming ------------------------------------------------------
+# While a popup is open the panels behind it are re-drawn dimmed, so the popup
+# reads as the only live thing on screen. Each colour keeps its hue and is
+# scaled toward the terminal background, so a backgrounded panel still reads as
+# itself — Hue blue stays blue, just quiet.
+#
+# Where the terminal can redefine colour slots the dimmed shade is exact. Where
+# it can't, it snaps to the 6x6x6 cube, which is coarsest exactly where these
+# colours land; hue drifts by up to ~35 degrees on a pale accent, a tint rather
+# than a change of colour. (Searching all 240 stock colours by weighted
+# distance instead of rounding each channel gives bit-identical results — the
+# coarseness is the cube's, not the rounding's.)
+#
+# Not A_DIM: dimming an already-dim cell is a no-op, so an attribute-level pass
+# would flatten the panels' own dim-vs-normal hierarchy, and A_DIM|A_BOLD is
+# contradictory enough that terminals disagree about which wins.
+# How far toward the background a backdrop colour is pulled. Scaling RGB (not
+# HSL lightness, which lighten() inverts) is what makes the drop uniform: a
+# lightness cut barely moves a bright yellow, whose luminance lives in R+G
+# sitting near max, leaving sonos_yellow the loudest thing behind the popup.
+BACKDROP_SCALE = 0.55
+
+# Body text draws in the terminal's default foreground (colour name ""), which
+# we can't read back, so dimming assumes a light-grey default. Guessing low
+# would leave body text — most of the screen — barely dimmed at all.
+_DEFAULT_FG = (200, 200, 200)
+
+_backdrop = False
+_backdrop_names: dict[str, str] = {}  # colour name -> dimmed name, per init
+
+
+@contextmanager
+def backdrop(active: bool = True) -> Generator[None]:
+    """Draw everything inside the block dimmed behind a popup.
+
+    Wraps the panel pass in `Shell.render`; the popup itself is drawn outside
+    the block, at full strength. A no-op when `active` is False, so the caller
+    can wrap unconditionally.
+    """
+    global _backdrop
+    prev = _backdrop
+    _backdrop = active
+    try:
+        yield
+    finally:
+        _backdrop = prev
+
+
+def _cube_rgb(idx: int) -> tuple[int, int, int] | None:
+    """RGB for an xterm-256 index — the inverse of `_nearest_256` over the
+    6x6x6 cube, plus the 232-255 greyscale ramp. Returns None for the 16 base
+    ANSI slots, whose actual colours are the terminal's business, not ours."""
+    if 16 <= idx <= 231:
+        i = idx - 16
+        return _CUBE[i // 36], _CUBE[(i // 6) % 6], _CUBE[i % 6]
+    if 232 <= idx <= 255:
+        v = 8 + 10 * (idx - 232)
+        return v, v, v
+    return None
+
+
+def _color_rgb(name: str) -> tuple[int, int, int] | None:
+    """RGB behind a Seg/attr colour name — a PALETTE role, an `rgb:` name from
+    rgb_color/lighten, or "" for the assumed default foreground."""
+    if not name:
+        return _DEFAULT_FG
+    if name in PALETTE:
+        return _hex_rgb(PALETTE[name])
+    if name.startswith("rgb:"):
+        try:
+            r, g, b = (int(v) for v in name[4:].split(","))
+        except ValueError:
+            return None
+        return r, g, b
+    return None
+
+
+def backdrop_rgb(color: str, k: float = BACKDROP_SCALE) -> tuple[int, int, int] | None:
+    """The dimmed form of `color` behind a popup, or None for a name with no
+    resolvable colour.
+
+    Curses-free, so the invariants are unit-testable: every colour the app can
+    draw dims into the band, and luminance order is preserved so the backdrop
+    keeps its own bright-to-dim ranking.
+
+    Covers lighten()'s dynamic `rgb:` names as well as palette roles — hotkeys,
+    focused borders and selected rows all draw in those, and they are the
+    brightest cells on screen, so missing them would leave the backdrop's
+    loudest text lit.
+    """
+    rgb = _color_rgb(color)
+    if rgb is None:
+        return None
+    return tuple(round(c * k) for c in rgb)  # type: ignore[return-value]
+
+
+def _dimmed(color: str) -> str:
+    """Cached `backdrop_rgb` -> allocated colour name, for the per-cell hot path."""
+    if color in _backdrop_names:
+        return _backdrop_names[color]
+    rgb = backdrop_rgb(color)
+    name = color if rgb is None else rgb_color(*rgb)
+    _backdrop_names[color] = name
     return name
 
 
@@ -284,7 +423,16 @@ def badge_color(state: str, accent: str) -> str:
 
 
 def attr(color: str = "", *, bold: bool = False, dim: bool = False) -> int:
-    """Build a curses attribute from a color name + flags."""
+    """Build a curses attribute from a color name + flags.
+
+    Inside a `backdrop()` block the colour is swapped for its receded shade.
+    Every draw in the app routes through here, so that one substitution covers
+    the whole screen without any panel knowing a popup is open. `dim` is left
+    applied on top, keeping each panel's own dim-vs-normal split legible while
+    the whole field recedes.
+    """
+    if _backdrop:
+        color = _dimmed(color)
     a = curses.color_pair(_PAIRS.get(color, 0))
     if bold:
         a |= curses.A_BOLD
