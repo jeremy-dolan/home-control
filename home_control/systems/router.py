@@ -1187,9 +1187,11 @@ class RouterSystem(System):
     poll_interval_focused = 2.0
     poll_interval_idle = 5.0
 
-    # Download is the panel's own accent; only the upload series needs a colour of
-    # its own, to stay distinguishable where the two charts stack.
-    UP_COLOR = "info"    # upload throughput chart (bottom, grows up)
+    # Both chart series carry their own colour. The panel accent is a deep
+    # emerald tuned to sit quietly behind the readouts, which is the wrong job
+    # for a line the eye is meant to follow.
+    DOWN_COLOR = "info_green"  # download throughput chart (top, grows down)
+    UP_COLOR = "info_teal"     # upload throughput chart (bottom, grows up)
     MAX_CHART_H = 10      # stacked-chart height (download 4 + base + upload 4 + base)
 
     def __init__(self):
@@ -1285,13 +1287,13 @@ class RouterSystem(System):
             cw = max(1, w - 2 * pad)
             chart = _stack_chart(
                 s.down_hist, s.up_hist, cw, height,
-                down_color=self.color, up_color=self.UP_COLOR,
+                down_color=self.DOWN_COLOR, up_color=self.UP_COLOR,
                 down_text=down_text, up_text=up_text,
             )
             collecting = not chart
             if collecting:
                 chart = _empty_chart(
-                    cw, height, down_color=self.color, up_color=self.UP_COLOR,
+                    cw, height, down_color=self.DOWN_COLOR, up_color=self.UP_COLOR,
                     down_text=down_text, up_text=up_text,
                 )
             # Title row shares the line with the chart's overflow row: draw that first,
@@ -1306,7 +1308,7 @@ class RouterSystem(System):
         # No vertical room for a graph — title + one-line readout.
         region.text(y, 0, "Throughput", self.color, bold=True)
         region.segs(y, [
-            Seg("● ", self.color), Seg(f"↓ {_fmt_rate(s.down_bps)}"),
+            Seg("● ", self.DOWN_COLOR), Seg(f"↓ {_fmt_rate(s.down_bps)}"),
             Seg("      "),
             Seg("● ", self.UP_COLOR), Seg(f"↑ {_fmt_rate(s.up_bps)}"),
         ], 12)

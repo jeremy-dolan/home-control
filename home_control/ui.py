@@ -31,7 +31,8 @@ from dataclasses import dataclass
 #   variant by design; layout, weight, cursors and glyphs carry the UI without
 #   hue). Entries are semantic roles that mean the same in any panel — warn
 #   (working, wants attention), fault (unreachable/failed), muted (a value that
-#   is itself off/absent), info (neutral secondary series), neutral/neutral_dim
+#   is itself off/absent), info_teal/info_green (neutral secondary series,
+#   two so one panel can carry two at once), neutral/neutral_dim
 #   (hueless chrome for UI the shell owns rather than a device) — plus one base
 #   accent per system in SYSTEM_COLORS. Accent is chrome only (borders, cursors,
 #   hotkeys, section headers, bars); body text stays the terminal default.
@@ -115,7 +116,11 @@ PALETTE = {
     "warn":  "#E3B341",  # working, but wants attention (filter due, error code)
     "fault": "#F85149",  # unreachable, offline, failed
     "muted": "#8A8A8A",  # a value that is itself off/absent/inactive
-    "info":  "#39C5CF",  # neutral secondary series (upload chart)
+    # Neutral secondary series — a colour for something that needs to stand
+    # apart without claiming to be a device. Two of them, so a panel can carry
+    # two series at once (the Router charts) and still read as one family.
+    "info_teal":  "#39C5CF",
+    "info_green": "#00C300",  # picked to pop: where ANSI 32 lands on a stock xterm
 
     # Hueless chrome for UI that belongs to no system — the voice overlay floats
     # above every panel, so an accent would imply it acts on that one device.
