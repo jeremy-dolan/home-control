@@ -26,15 +26,15 @@ VOICE_KEY = ord(" ")
 # Fixed geometry for the Voice box: sized to fit the input-mode prompt, then
 # held constant across every mode so the box doesn't resize as the dialogue
 # progresses from listening -> thinking -> result.
-VOICE_CONTENT_W = 44
+VOICE_CONTENT_W = 46
 VOICE_BODY_LINES = 8
 
 # Static sample phrases shown in the box so a new user sees the kind of
 # natural phrasing that works, without deriving a live tool listing.
 VOICE_EXAMPLES = [
-    "Turn the music up 3",
-    "Set the living room lights for reading",
-    "Turn off all the ACs and lights",
+    "Turn down the lights and start the movie",
+    "It's too warm in the bedroom",
+    "Move the music to the kitchen",
 ]
 GLOBAL_TOOLBAR = "TAB change system    SPACE voice command    ? help    q quit"
 
