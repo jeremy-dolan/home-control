@@ -903,11 +903,10 @@ class SonosSystem(System):
         n = len(zones)
         left = f"{n} speakers joined"
         vols = "  ".join(f"{z.name} (vol {z.volume})" for z in zones)
-        line2_text = pad_between(left, vols, width)
-        line2 = [Seg(line2_text[: len(left)], dim=True), Seg(line2_text[len(left):])]
-        # Stopped group → dim everything (song, room names, volumes).
+        line2 = [Seg(pad_between(left, vols, width), dim=True)]
+        # Stopped group → dim the song too.
         if zone.transport_state == "STOPPED":
-            for s in (*line1, *line2):
+            for s in line1:
                 s.dim = True
         return [line1, line2]
 

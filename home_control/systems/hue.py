@@ -349,9 +349,11 @@ class HueController:
             return list(self.rooms), dict(self.lights)
 
     @property
-    def summary(self) -> str:
+    def summary(self) -> tuple[str, str]:
+        """Collapsed-line summary in two parts: the static inventory, and the
+        live on-count the panel keeps bright."""
         n_on = sum(1 for ls in self.lights.values() if ls.on)
-        return f"{len(self.rooms)} rooms/{len(self.lights)} lights · {n_on} on"
+        return f"{len(self.rooms)} rooms/{len(self.lights)} lights · ", f"{n_on} on"
 
     # -- commands (main thread; brief blocking HTTP) -----------------------
     def _set_light(self, lid: int, key, value=None) -> bool:
@@ -910,9 +912,10 @@ class HueSystem(System):
             return [[Seg(f"{self.ctl.ip}: {msg}", dim=True)]]
         # Badge mirrors the Router's "● ONLINE": accent colour, bold, on the left.
         badge = "● CONNECTED"
-        line = pad_between(badge, self.ctl.summary, width)
-        return [[Seg(badge, badge_color(BADGE_ACTIVE, self.color), bold=True),
-                 Seg(line[len(badge):])]]
+        inventory, on_count = self.ctl.summary
+        left = [Seg(badge, badge_color(BADGE_ACTIVE, self.color), bold=True)]
+        right = [Seg(inventory, dim=True), Seg(on_count)]
+        return [justify(left, right, width)]
 
     # -- expanded ----------------------------------------------------------
     def _build_items(self, rooms: list[Room], lights: dict[int, Light]) -> None:

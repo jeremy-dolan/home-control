@@ -17,25 +17,42 @@ see also: https://chatgpt.com/c/6a56a686-1e48-83ea-8eff-301762040029
 
 ## Roku badge work
 
-■ IDLE    Roku Dynamic Menu   <-- when collapsed
-■ IDLE      Roku Dynamic Menu <-- when expanded
+Done: badge labels pad to `BADGE_W` and both the collapsed line and the
+expanded header start their detail at `DETAIL_COL` (`BADGE_W + 2` = 11,
+matching Sonos), so the column no longer shifts between `▶ PLAYING` /
+`⏸ PAUSED` / `■ IDLE` / `● ASLEEP`, and the two panels line up with each other.
+"Roku Dynamic Menu" is rewritten as "Roku Menu", detected via the active-app
+`type="home"` attribute rather than the display string (which varies by
+firmware).
 
-if we add one to the collapsed, and remove one from expanded, it will align
-with the display for Sonos.  Not sure if aesthetically aligning is good, or
-"too straigtht"
+Still open: which media-player states deserve a badge of their own. An idle
+player reports `state="close"` (live, OS 15.3.4) and that is the only state
+observed so far; Roku also documents `none`, `startup`, `buffer`, `play`,
+`pause`, `finished`, `stopped`, and `error`, and `badge()` funnels every
+unobserved one into `■ IDLE`. Two look wrong there: `buffer` is active work and
+wants a LOADING badge like Sonos's `⟳`, and `error` renders as a calm IDLE
+rather than FAULT. Confirming either needs live observation of a state we can't
+trigger on demand. (Standby turned out *not* to be one of these — it's a
+separate `power-mode` axis, now handled.)
 
-There's also this comment:
+## Block find_remote when the device says it can't
 
-def badge(state: str) -> tuple[str, str]:
-    """(label, badge state) for a media-player state; unknown states read as IDLE.
-    `ui.badge_color` turns the state into a color."""
-    return _BADGE.get(state, ("■ IDLE", BADGE_IDLE))
+`/query/device-info` reports `supports-find-remote: true` next to
+`find-remote-is-possible: false` (live Roku Ultra, 2026-08-01) — the second is
+the one that matters, and it's the one we don't read. The `find_remote` voice
+action fires the ECP keypress regardless, so it silently does nothing and
+reports success. Gate the action on `find-remote-is-possible` and say why it
+can't run instead of pretending it worked.
 
-I would be curious to know more about what the 'unknown' states are, that we're
-hiding by using IDLE as a default.
+## Roku device-info fields we don't surface
 
-Also should substitute "Roku Dynamic Menu" for something less branded and
-wordy. Maybe "Home"?
+An audit of the ECP `query/` endpoints against what `roku.py` parses (live Roku
+Ultra, OS 15.3.4, 2026-08-01) found we read 5 fields of ~75. Enough for a
+device-info overlay someday — Roku has none, Sonos and Hue both do:
+`network-type` (ethernet/wifi) plus the wifi/ethernet/bluetooth MACs,
+`user-device-location`, `serial-number`, `model-number`, `ui-resolution`,
+`uptime`, and the timezone block (`time-zone`, `clock-format`,
+`time-zone-offset`).
 
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
