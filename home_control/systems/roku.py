@@ -734,8 +734,8 @@ class RokuSystem(System):
             "Controls Roku players over ECP (External Control Protocol — "
             "HTTP on port 8060): navigation, playback, app launch, and "
             "typing into on-screen text fields. The player is auto-discovered "
-            "via SSDP at startup (~3s); if several respond, the first is "
-            "used. ECP reports the foreground app and playback state but not "
+            "via SSDP at startup (~3s); if several respond, only the first "
+            "is used. ECP reports the foreground app and playback state but not "
             "the media title (Roku doesn't expose it), so the status line "
             "names the app, not the particular content being played.",
             "Keyboard mode forwards each character straight to whatever field "
