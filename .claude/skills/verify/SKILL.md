@@ -15,13 +15,36 @@ cube colour there. A capture shows the *quantised* rendering, not the hex —
 terminals with `init_color` (kitty, iTerm, xterm) show the exact value. Treat
 tmux SGR codes as a floor, and confirm anything subtle in a real terminal.
 
-Don't chase the exact hex by capturing under a `ccc`-capable TERM instead.
-There `init_colors()` redefines palette slots via `init_color`, which ncurses
-emits as OSC 4 (`ESC]4;<slot>;rgb:...`) and thereafter references as a plain
-`ESC[38;5;<slot>`. Any capture that doesn't track the redefinition resolves
-those slots against its own stock table, so the colours come back confidently
-wrong rather than merely approximate. tmux's quantised index is the honest
-reading.
+Don't chase the exact hex by naively capturing under a `ccc`-capable TERM
+instead. There `init_colors()` redefines colour slots via `init_color`, which
+ncurses emits as OSC 4 (`ESC]4;<slot>;rgb:RR/GG/BB`, uppercase hex) and
+thereafter references as a plain `ESC[38;5;<slot>`. Any capture that doesn't
+track the redefinition resolves those slots against its own stock table, so the
+colours come back confidently wrong rather than merely approximate.
+
+But tmux is not the honest reading either. It is honest about *quantisation*
+and blind to *slot identity*: tmux never redefines a slot, so a bug where two
+colours are handed the same one cannot appear there at all. That blindness
+shipped a broken backdrop-dimming feature — dimmed colours snapped onto indices
+`init_colors()` had already overwritten, so Hue's blue rendered as Roku's purple
+and the Router charts didn't dim, while the tmux capture looked perfect.
+
+To read the ccc path honestly, parse the slot table rather than screen-scraping
+it. `xterm-256color` has `ccc` — no `tmux` terminfo entry does, and of `screen`'s
+only the obscure `screen.putty` — so a plain pty is enough:
+
+```bash
+TERM=xterm-256color script -qec "…" raw.out
+```
+
+Pull `ESC]4;<slot>;rgb:…` out of `raw.out` and resolve each `ESC[38;5;<N>`
+against *that* table. Strip the real `\r`/`\n` bytes first — running the file
+through `cat -v` rewrites them as the literal characters `^M`, which then
+survive any later strip and split the sequences.
+
+Better still, don't use a terminal: slot allocation is pure colour-model logic,
+so a headless unit test catches this class of bug in milliseconds. Reach for the
+pty only to confirm what the allocator actually emitted.
 
 ## Launch (from any checkout/worktree)
 
