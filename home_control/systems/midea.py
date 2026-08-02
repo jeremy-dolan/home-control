@@ -910,19 +910,21 @@ class MideaController:
             self._units = {
                 151732604866906: MideaUnit(
                     id=151732604866906, ip="192.168.1.50", name="Living Room", online=True,
-                    contacted=True, power=True, mode="COOL", fan_speed="MEDIUM", swing_mode="OFF",
-                    target_temp_c=24.0, indoor_temp_c=24.0, outdoor_temp_c=23.5, fahrenheit=True,
-                    display_on=True,  # keep one demo unit with its display on
+                    contacted=True, caps_known=True, power=True, mode="COOL", fan_speed="MEDIUM",
+                    swing_mode="OFF", target_temp_c=24.0, indoor_temp_c=24.0, outdoor_temp_c=23.5,
+                    fahrenheit=True, display_on=True,  # keep one demo unit with its display on
                 ),
                 151732604866907: MideaUnit(
                     id=151732604866907, ip="192.168.1.51", name="Bedroom", online=True,
-                    contacted=True, power=True, mode="FAN_ONLY", fan_speed="LOW", swing_mode="VERTICAL",
-                    target_temp_c=22.0, indoor_temp_c=26.0, outdoor_temp_c=23.5, fahrenheit=True,
-                    eco=True, display_on=False, filter_alert=True,
+                    contacted=True, caps_known=True, power=True, mode="FAN_ONLY", fan_speed="LOW",
+                    swing_mode="VERTICAL", target_temp_c=22.0, indoor_temp_c=26.0,
+                    outdoor_temp_c=23.5, fahrenheit=True, eco=True, display_on=False,
+                    filter_alert=True,
                 ),
                 151732604866908: MideaUnit(
                     id=151732604866908, ip="192.168.1.52", name="Office", online=False,
-                    contacted=True, power=False, fahrenheit=True,  # offline, showing last-known
+                    contacted=True, caps_known=True, power=False,
+                    fahrenheit=True,  # offline, showing last-known
                 ),
             }
 

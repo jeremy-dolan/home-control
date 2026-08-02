@@ -121,8 +121,18 @@ def test_mock_fixture_shape(mock_env):
     assert any(not u.online for u in units.values())
     assert any(u.mode == "FAN_ONLY" for u in units.values())
     # Every mock unit stands in for a device we've read, so all must be
-    # contacted — otherwise they'd render as bare "connecting…" cards.
+    # contacted *and* have capabilities — otherwise they'd render as bare
+    # "connecting…" cards, or (missing caps) collapse to a lone header row,
+    # leaving the mock TUI a weaker surface than the panel it stands in for.
     assert all(u.contacted for u in units.values())
+    assert all(u.caps_known for u in units.values())
+
+
+def test_mock_units_render_full_cards(mock_env):
+    s = midea.MideaSystem()
+    s.poll(True)
+    for u in s._units():
+        assert len(s._card_rows(u, is_selected=False, width=76)) == 3
 
 
 def test_system_collapsed_lines_one_row_per_unit(mock_env):
