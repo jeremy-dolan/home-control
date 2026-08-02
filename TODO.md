@@ -17,25 +17,20 @@ see also: https://chatgpt.com/c/6a56a686-1e48-83ea-8eff-301762040029
 
 ## Roku badge work
 
-■ IDLE    Roku Dynamic Menu   <-- when collapsed
-■ IDLE      Roku Dynamic Menu <-- when expanded
+Mostly done. Badge labels now pad to `BADGE_W` and both the collapsed line and
+the expanded header start their detail at `DETAIL_COL` (12), so the column no
+longer shifts between `▶ PLAYING` / `⏸ PAUSED` / `■ IDLE` / `● ASLEEP`.
+"Roku Dynamic Menu" is rewritten as "Roku Menu", detected via the active-app
+`type="home"` attribute rather than the display string (which varies by
+firmware).
 
-if we add one to the collapsed, and remove one from expanded, it will align
-with the display for Sonos.  Not sure if aesthetically aligning is good, or
-"too straigtht"
-
-There's also this comment:
-
-def badge(state: str) -> tuple[str, str]:
-    """(label, badge state) for a media-player state; unknown states read as IDLE.
-    `ui.badge_color` turns the state into a color."""
-    return _BADGE.get(state, ("■ IDLE", BADGE_IDLE))
-
-I would be curious to know more about what the 'unknown' states are, that we're
-hiding by using IDLE as a default.
-
-Also should substitute "Roku Dynamic Menu" for something less branded and
-wordy. Maybe "Home"?
+On the "what are the unknown states we hide behind IDLE?" question: an idle
+player reports `state="close"` (live, OS 15.3.4) — that's the common one.
+Roku documents `none`, `startup`, `buffer`, `play`, `pause`, `finished`,
+`stopped`, and `error` besides; none observed live yet, so it's still an open
+question whether any deserves its own badge (`buffer` → a LOADING badge like
+Sonos's `⟳` is the likely candidate). Note that standby turned out *not* to be
+one of these — it's a separate `power-mode` axis, now handled.
 
 ## Block find_remote when the device says it can't
 

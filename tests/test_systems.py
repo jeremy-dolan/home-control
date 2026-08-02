@@ -1,6 +1,8 @@
 """Headless tests for pure helpers across the system modules (no curses init)."""
 
 import threading
+import xml.etree.ElementTree as ET
+from dataclasses import replace
 from types import SimpleNamespace
 
 from home_control import ui
@@ -233,6 +235,57 @@ def test_roku_badge():
     assert roku.badge("play") == ("▶ PLAYING", ui.BADGE_ACTIVE)
     assert roku.badge("pause") == ("⏸ PAUSED", ui.BADGE_IDLE)
     assert roku.badge("close") == ("■ IDLE", ui.BADGE_IDLE)
+
+
+def test_roku_badge_standby_outranks_media_state():
+    # A suspended Roku still reports a foreground app and a media state; the
+    # power mode has to win, or the panel calls a sleeping box idle-on-the-menu.
+    assert roku.badge("close", True) == ("● ASLEEP", ui.BADGE_IDLE)
+    assert roku.badge("play", True) == ("● ASLEEP", ui.BADGE_IDLE)
+    # Every label pads to the same width, so the detail column never shifts.
+    assert len({len(f"{roku.badge(s, a)[0]:<{roku.BADGE_W}}")
+                for s, a in [("play", False), ("pause", False), ("close", False), ("close", True)]}) == 1
+
+
+def test_roku_device_asleep_modes():
+    assert roku.RokuDevice(power_mode="Suspend").asleep
+    assert roku.RokuDevice(power_mode="Ready").asleep
+    assert not roku.RokuDevice(power_mode="PowerOn").asleep
+    # DisplayOff is a TV playing with the screen off — active, not asleep.
+    assert not roku.RokuDevice(power_mode="DisplayOff").asleep
+    assert not roku.RokuDevice().asleep  # unknown/unfetched never reads as asleep
+
+
+def test_roku_collapsed_line_asleep_shows_badge_only(monkeypatch):
+    rk = _mock_roku(monkeypatch)
+    rk.ctl.device = replace(rk.ctl.device, power_mode="Suspend")
+    (line,) = rk.collapsed_lines(76)
+    assert line[0].text.startswith("● ASLEEP")
+    # The foreground app it still reports is a phantom — show nothing after the badge.
+    assert "".join(seg.text for seg in line).strip() == "● ASLEEP"
+
+
+def test_roku_power_refresh_is_throttled(monkeypatch):
+    ctl = roku.RokuController(ip="192.0.2.1")
+    ctl.mock = False
+    fetched: list[str] = []
+
+    def fake_get(endpoint, timeout=roku.HTTP_TIMEOUT):
+        fetched.append(endpoint)
+        return ET.fromstring("<device-info><power-mode>Suspend</power-mode></device-info>")
+
+    monkeypatch.setattr(ctl, "_get_xml", fake_get)
+    now = [1000.0]
+    monkeypatch.setattr(roku.time, "monotonic", lambda: now[0])
+
+    ctl._refresh_power()                       # first read goes through
+    ctl._refresh_power()                       # immediately again: throttled
+    assert fetched == ["device-info"]
+    assert ctl.device.power_mode == "Suspend"
+
+    now[0] += roku.POWER_POLL_INTERVAL + 0.1   # past the throttle window
+    ctl._refresh_power()
+    assert fetched == ["device-info", "device-info"]
 
 
 def _mock_roku(monkeypatch):

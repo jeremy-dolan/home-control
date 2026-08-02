@@ -26,7 +26,7 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .. import config
 from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, hint, hint_row, select_row
@@ -45,6 +45,10 @@ CONNECT_TIMEOUT = 5  # seconds
 # single missed poll is almost always a transient blip, not a disconnect — don't
 # tear down the panel for it.
 RECONNECT_GRACE = 3
+# Power state lives in device-info, which is far larger than the two steady-state
+# queries (~3.5KB vs ~300B). Standby transitions are human-initiated and slow, so
+# re-read it on its own throttle rather than on every refresh.
+POWER_POLL_INTERVAL = 3.0  # seconds
 # Seconds a Roku may randomize its SSDP reply over (the MX header). Discovery
 # listens at least this long so a late responder isn't missed.
 SSDP_MX = 2
@@ -78,6 +82,18 @@ _BADGE = {
     "pause": ("⏸ PAUSED", BADGE_IDLE),
 }
 
+# Power modes that mean "asleep". A suspended Roku still answers ECP and still
+# names the home screen as its foreground app, so the media state alone can't
+# tell standby from sitting on the menu — power-mode is the only signal.
+# DisplayOff is deliberately absent: it's a Roku TV playing audio with the screen
+# off, which is *active*, so it falls through to the media badge.
+_ASLEEP_MODES = {"Suspend", "Ready", "Headless"}
+
+# Widest badge label, so the column after it doesn't shift as the state changes,
+# and the column the collapsed line and the expanded header both start detail in.
+BADGE_W = len("▶ PLAYING")
+DETAIL_COL = 12
+
 # Voice button name -> ECP keypress.
 _VOICE_KEYS = {
     "home": "Home", "back": "Back", "play": "Play", "pause": "Play",
@@ -88,9 +104,12 @@ _VOICE_KEYS = {
 }
 
 
-def badge(state: str) -> tuple[str, str]:
+def badge(state: str, asleep: bool = False) -> tuple[str, str]:
     """(label, badge state) for a media-player state; unknown states read as IDLE.
-    `ui.badge_color` turns the state into a color."""
+    `ui.badge_color` turns the state into a color. Standby outranks the media
+    state — a sleeping Roku still reports a foreground app."""
+    if asleep:
+        return "● ASLEEP", BADGE_IDLE
     return _BADGE.get(state, ("■ IDLE", BADGE_IDLE))
 
 
@@ -104,6 +123,11 @@ class RokuDevice:
     name: str = ""
     model: str = ""
     sw: str = ""
+    power_mode: str = ""  # PowerOn | Ready | Suspend | DisplayOff | Headless
+
+    @property
+    def asleep(self) -> bool:
+        return self.power_mode in _ASLEEP_MODES
 
 
 @dataclass
@@ -134,6 +158,7 @@ class RokuController:
         self.device = RokuDevice()
         self.media = RokuMedia()
         self.apps: list[tuple[str, str]] = []
+        self._power_checked = 0.0    # monotonic stamp of the last device-info re-read
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
 
     @property
@@ -173,7 +198,9 @@ class RokuController:
                 name=info.findtext("user-device-name") or info.findtext("friendly-device-name") or "Roku",
                 model=info.findtext("model-name") or "",
                 sw=info.findtext("software-version") or "",
+                power_mode=info.findtext("power-mode") or "",
             )
+            self._power_checked = time.monotonic()
             self.connected = True
             self.ever_connected = True
             self.fail_count = 0
@@ -215,6 +242,22 @@ class RokuController:
         with self._lock:
             self.fail_count = 0
             self.media = RokuMedia(state=state, app=app_name, home=home, position=pos, duration=dur)
+        self._refresh_power()
+
+    def _refresh_power(self) -> None:
+        """Re-read power-mode from device-info, no more than once every
+        POWER_POLL_INTERVAL. A miss leaves the last-known mode alone — _refresh
+        already owns declaring the device gone."""
+        with self._lock:
+            if time.monotonic() - self._power_checked < POWER_POLL_INTERVAL:
+                return
+            self._power_checked = time.monotonic()
+        info = self._get_xml("device-info")
+        if info is None:
+            return
+        mode = info.findtext("power-mode") or ""
+        with self._lock:
+            self.device = replace(self.device, power_mode=mode)
 
     # -- discovery (SSDP) --------------------------------------------------
     def _discover(self) -> str | None:
@@ -393,7 +436,8 @@ class RokuController:
         with self._lock:
             self.connected = True
             self.ever_connected = True
-            self.device = RokuDevice(name="Living Room TV", model="Roku Ultra", sw="12.0.0")
+            self.device = RokuDevice(name="Living Room TV", model="Roku Ultra", sw="12.0.0",
+                                     power_mode="PowerOn")
             self.media = RokuMedia(state="pause", app="YouTube", position="1:23", duration="45:00")
             self.apps = [
                 ("837", "YouTube"), ("12", "Netflix"), ("13", "Prime Video"),
@@ -506,12 +550,14 @@ class RokuSystem(System):
     def collapsed_lines(self, width: int) -> list[Line]:
         if not self.ctl.connected:
             return [[Seg(self._status(), dim=True)]]
-        _, media = self.ctl.snapshot()
-        label, state = badge(media.state)
-        detail = media.app or self.ctl.device.name or ""
+        dev, media = self.ctl.snapshot()
+        label, state = badge(media.state, dev.asleep)
+        # Asleep it still reports a foreground app, but nothing is on screen and
+        # the badge already says everything — leave the rest of the line empty.
+        detail = "" if dev.asleep else (media.app or dev.name or "")
         # Same badge grammar as Router's "● ONLINE" / Lighting's "● CONNECTED".
-        return [[Seg(label, badge_color(state, self.color), bold=state == BADGE_ACTIVE),
-                 Seg("    " + detail, dim=media.home)]]
+        return [[Seg(f"{label:<{BADGE_W}}", badge_color(state, self.color), bold=state == BADGE_ACTIVE),
+                 Seg(" " * (DETAIL_COL - BADGE_W) + detail, dim=media.home)]]
 
     # -- expanded ----------------------------------------------------------
     def render_expanded(self, region: Region) -> None:
@@ -535,14 +581,14 @@ class RokuSystem(System):
     def _render_header(self, region: Region) -> None:
         dev, media = self.ctl.snapshot()
         # Line 0: status badge + what's on, mirroring Router/Lighting.
-        label, state = badge(media.state)
+        label, state = badge(media.state, dev.asleep)
         region.text(0, 0, label, badge_color(state, self.color), bold=state == BADGE_ACTIVE)
-        line = media.app or "Home"
+        parts = [] if dev.asleep else [media.app or "Home"]
         if media.position and media.duration:
-            line += f"   {media.position} / {media.duration}"
+            parts.append(f"{media.position} / {media.duration}")
         if not self.ctl.connected:
-            line += "   (reconnecting...)"
-        region.text(0, 12, line)
+            parts.append("(reconnecting...)")
+        region.text(0, DETAIL_COL, "   ".join(parts), dim=media.home)
         # Line 1: device identity — model first, then version and IP, parallel to
         # Lighting's "Hue Bridge v2 (192.168.1.99)".
         info = " ".join(p for p in (dev.model or "Roku", f"v{dev.sw}" if dev.sw else "") if p)
