@@ -12,7 +12,7 @@ from pathlib import Path
 from . import layout
 from .poller import Poller
 from .systems import System, build_systems
-from .ui import Line, Region, Seg, attr, draw_box, hint, hint_row, init_colors, seg_len
+from .ui import Line, Region, Seg, attr, backdrop, draw_box, hint, hint_row, init_colors, seg_len
 from .voice import VoiceController
 
 # Cap drawn width so boxes don't sprawl on very wide terminals.
@@ -106,26 +106,30 @@ class Shell:
         collapsed_heights = [s.collapsed_height for s in self.systems]
         slots = layout.compute_layout(collapsed_heights, self.focused, h)
 
-        focused_slot = slots[0]
-        for slot in slots:
-            system = self.systems[slot.index]
-            region = draw_box(stdscr, slot.top, 0, slot.height, width,
-                              system.name, system.color, focused=slot.focused)
-            if slot.focused:
-                focused_slot = slot
-            if region.height <= 0:
-                continue
-            if slot.focused:
-                self._render_focused(stdscr, system, region)
-            else:
-                for i, line in enumerate(system.collapsed_lines(region.width)):
-                    region.segs(i, line)
+        popup_sys = self._popup_system()
+        overlaid = self.show_help or popup_sys is not None or self.voice.active()
 
-        self._render_status_line(stdscr, h, w)
-        self._render_global_toolbar(stdscr, h, w)
+        focused_slot = slots[0]
+        with backdrop(overlaid):
+            for slot in slots:
+                system = self.systems[slot.index]
+                region = draw_box(stdscr, slot.top, 0, slot.height, width,
+                                  system.name, system.color, focused=slot.focused)
+                if slot.focused:
+                    focused_slot = slot
+                if region.height <= 0:
+                    continue
+                if slot.focused:
+                    self._render_focused(stdscr, system, region)
+                else:
+                    for i, line in enumerate(system.collapsed_lines(region.width)):
+                        region.segs(i, line)
+
+            self._render_status_line(stdscr, h, w)
+            self._render_global_toolbar(stdscr, h, w)
+
         if self.show_help:
             self._render_help(stdscr, h, w, focused_slot)
-        popup_sys = self._popup_system()
         if popup_sys is not None:
             self._render_popup(stdscr, h, w, popup_sys)
         if self.voice.active():
