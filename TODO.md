@@ -42,6 +42,16 @@ action fires the ECP keypress regardless, so it silently does nothing and
 reports success. Gate the action on `find-remote-is-possible` and say why it
 can't run instead of pretending it worked.
 
+## Roku device-info fields we don't surface
+
+An audit of the ECP `query/` endpoints against what `roku.py` parses (live Roku
+Ultra, OS 15.3.4, 2026-08-01) found we read 5 fields of ~75. Enough for a
+device-info overlay someday — Roku has none, Sonos and Hue both do:
+`network-type` (ethernet/wifi) plus the wifi/ethernet/bluetooth MACs,
+`user-device-location`, `serial-number`, `model-number`, `ui-resolution`,
+`uptime`, and the timezone block (`time-zone`, `clock-format`,
+`time-zone-offset`).
+
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
 for in-app help vs. README.md

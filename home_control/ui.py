@@ -45,7 +45,10 @@ from dataclasses import dataclass
 #   off/stopped), BADGE_FAULT -> fault. An item going unreachable (one light,
 #   one AC unit) is IDLE; FAULT is reserved for a whole panel's device being
 #   unreachable. Pad the label to a fixed width so the column after it doesn't
-#   shift as the state changes.
+#   shift as the state changes. Label wording tracks the kind of state: -ing for
+#   active work (PLAYING, LOADING — the only two, and both ACTIVE), an adjective
+#   for a resting condition (IDLE, ONLINE, ASLEEP), -ed for a state someone put
+#   the device into (PAUSED, STOPPED, CONNECTED).
 #
 # Selection. cursor(accent, sel) — an accent "▶ " when selected, else two
 #   blanks — is the guaranteed cue and owns the leading two columns of every
