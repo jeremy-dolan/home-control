@@ -23,10 +23,12 @@ MAX_WIDTH = 100
 # SPACE falls through to it as a typed character.
 VOICE_KEY = ord(" ")
 
-# Fixed geometry for the Voice box: sized to fit the input-mode prompt, then
-# held constant across every mode so the box doesn't resize as the dialogue
-# progresses from listening -> thinking -> result.
-VOICE_CONTENT_W = 46
+# Fixed geometry for the Voice box, held constant across every mode so the box
+# doesn't resize as the dialogue progresses from listening -> thinking ->
+# result. The width is the longest example plus its two-space indent and
+# quotes; body lines are clipped to it in `_render_voice`, so a longer phrase
+# than the width allows loses its tail silently.
+VOICE_CONTENT_W = 44
 VOICE_BODY_LINES = 8
 
 # Static sample phrases shown in the box so a new user sees the kind of
