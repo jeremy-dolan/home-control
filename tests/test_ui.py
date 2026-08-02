@@ -99,6 +99,18 @@ def test_every_accent_lightens_to_a_distinct_256_index():
         assert base_idx != lit_idx, f"{role} has no lighten() headroom (base==lifted at index {base_idx})"
 
 
+def test_voice_overlay_greys_stay_three_distinct_tiers():
+    # The overlay carries no accent, so its only hierarchy is brightness: white
+    # border > lightened hint key > hint label. Collapse any two and the hints
+    # stop reading as hints.
+    lit = _lighten_rgb("neutral_dim")
+    assert lit is not None
+    border = _nearest_256(*_hex_rgb(PALETTE["neutral"]))
+    key = _nearest_256(*lit)
+    label = _nearest_256(*_hex_rgb(PALETTE["neutral_dim"]))
+    assert border != key != label and border != label
+
+
 def test_lighten_rgb_is_none_outside_the_palette():
     assert _lighten_rgb("not_a_color") is None
 

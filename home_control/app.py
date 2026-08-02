@@ -26,15 +26,15 @@ VOICE_KEY = ord(" ")
 # Fixed geometry for the Voice box: sized to fit the input-mode prompt, then
 # held constant across every mode so the box doesn't resize as the dialogue
 # progresses from listening -> thinking -> result.
-VOICE_CONTENT_W = 44
+VOICE_CONTENT_W = 46
 VOICE_BODY_LINES = 8
 
 # Static sample phrases shown in the box so a new user sees the kind of
 # natural phrasing that works, without deriving a live tool listing.
 VOICE_EXAMPLES = [
-    "Turn the music up 3",
-    "Set the living room lights for reading",
-    "Turn off all the ACs and lights",
+    "Turn down the lights and start the movie",
+    "It's too warm in the bedroom",
+    "Move the music to the kitchen",
 ]
 GLOBAL_TOOLBAR = "TAB change system    SPACE voice command    ? help    q quit"
 
@@ -197,7 +197,7 @@ class Shell:
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
         mode, buffer, message, _is_error = self.voice.snapshot()
-        color = "info"
+        color, hint_color = "neutral", "neutral_dim"
         mid = VOICE_BODY_LINES // 2
         # Static sample phrases, shown while the dialogue is still waiting for
         # a command so the user sees what's possible without asking the model.
@@ -205,7 +205,8 @@ class Shell:
         if mode == "input":
             body = ["Listening...", "", *hints, "", "> " + buffer + "_"]
             dim_rows: set[int] = {0} | set(range(2, 2 + len(hints)))
-            hint_line: Line = hint_row(hint("ENTER", "send", color), hint("ESC", "cancel", color), sep="    ")
+            hint_line: Line = hint_row(
+                hint("ENTER", "send", hint_color), hint("ESC", "cancel", hint_color), sep="    ")
         elif mode == "listening":
             body = ["Listening...", "", *hints]
             dim_rows = {0} | set(range(2, 2 + len(hints)))
