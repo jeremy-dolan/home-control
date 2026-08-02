@@ -143,7 +143,9 @@ SYSTEM_COLORS = {
 }
 
 _PAIRS: dict[str, int] = {}
-_next_pair = 1  # next free curses pair slot; set at the end of init_colors()
+_next_pair = 1   # next free curses pair number
+_next_slot = 16  # next free colour slot to redefine (base ANSI 0-15 left alone)
+_can_change = False  # terminal supports init_color, so colours can be exact
 _dynamic_names: set[str] = set()  # lazily-allocated RGB pairs, cleared on re-init
 
 # xterm-256 color cube levels, for nearest-color fallback.
@@ -156,10 +158,26 @@ def _hex_rgb(h: str) -> tuple[int, int, int]:
 
 
 def _nearest_256(r: int, g: int, b: int) -> int:
-    """Map an RGB triple to the closest xterm-256 color-cube index."""
+    """Map an RGB triple to the closest xterm-256 color, cube or greyscale ramp.
+
+    The 6x6x6 cube's grey diagonal has only six steps, so a near-grey snapping
+    to the cube alone quantises brutally — the backdrop's ten grey levels
+    collapsed to two before the 232-255 ramp was considered here. The ramp is 24
+    steps of 10, and losing to the cube whenever the cube has an exact match, so
+    adding it strictly improves the fit and leaves every existing cube colour
+    where it was.
+    """
     def lvl(v: int) -> int:
         return min(range(6), key=lambda i: abs(_CUBE[i] - v))
-    return 16 + 36 * lvl(r) + 6 * lvl(g) + lvl(b)
+
+    cube = 16 + 36 * lvl(r) + 6 * lvl(g) + lvl(b)
+    cube_err = sum((_CUBE[lvl(v)] - v) ** 2 for v in (r, g, b))
+
+    k = min(range(24), key=lambda i: abs(8 + 10 * i - (r + g + b) / 3))
+    grey = 8 + 10 * k
+    grey_err = sum((grey - v) ** 2 for v in (r, g, b))
+
+    return 232 + k if grey_err < cube_err else cube
 
 
 def init_colors() -> None:
@@ -168,69 +186,81 @@ def init_colors() -> None:
     On a terminal with fewer than 256 colors nothing is allocated, so every name
     falls through to the default foreground in `attr()`.
     """
-    global _next_pair
+    global _next_pair, _next_slot, _can_change
     curses.start_color()
     curses.use_default_colors()
     _PAIRS.clear()
     _PAIRS[""] = 0  # default terminal color
     _dynamic_names.clear()
     _next_pair = 1
+    _next_slot = 16  # leave the 16 base ANSI slots untouched
+    _can_change = False
 
     n_colors = getattr(curses, "COLORS", 0)
     if n_colors < 256:
         return
     try:
-        can_change = curses.can_change_color()
+        _can_change = curses.can_change_color()
     except curses.error:
-        can_change = False
+        _can_change = False
 
-    pair = 1
-    custom_slot = 16  # leave the 16 base ANSI slots untouched
     for name, hexv in PALETTE.items():
-        r, g, b = _hex_rgb(hexv)
-        fg = _nearest_256(r, g, b)
-        if can_change and 16 <= custom_slot < n_colors:
-            try:
-                curses.init_color(custom_slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
-                fg = custom_slot
-                custom_slot += 1
-            except curses.error:
-                pass
-        try:
-            curses.init_pair(pair, fg, -1)
-        except curses.error:
-            continue  # out of pair slots: this name renders in the default color
-        _PAIRS[name] = pair
-        pair += 1
+        _PAIRS[name] = _alloc(*_hex_rgb(hexv))
 
-    # Dynamic RGB pairs (rgb_color) re-register lazily above the fixed palette.
-    _next_pair = pair
+
+def _alloc(r: int, g: int, b: int) -> int:
+    """Allocate a curses pair rendering ``(r, g, b)``, returning its pair number.
+
+    Where the terminal can redefine colors, this claims the next free slot and
+    sets it to the exact RGB — palette roles and dynamic colors draw from the
+    same slot counter, so no two colors can ever be handed the same slot.
+
+    Only where it *can't* does the triple snap to the nearest stock cube color,
+    and there the snap is safe precisely because nothing has been redefined: an
+    index means what the terminal says it means. Mixing the two — snapping to a
+    stock index on a terminal where slots have been redefined — is what makes a
+    dark colour come back as some unrelated palette hue at full brightness.
+
+    Returns pair 0 (the default foreground) once slots or pairs run out.
+    """
+    global _next_pair, _next_slot
+    if _next_pair >= getattr(curses, "COLOR_PAIRS", 256):
+        return 0
+    fg = _nearest_256(r, g, b)
+    if _can_change and _next_slot < getattr(curses, "COLORS", 0):
+        try:
+            curses.init_color(_next_slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
+            fg = _next_slot
+            _next_slot += 1
+        except curses.error:
+            pass
+    try:
+        curses.init_pair(_next_pair, fg, -1)
+    except curses.error:
+        return 0
+    _next_pair += 1
+    return _next_pair - 1
 
 
 def rgb_color(r: int, g: int, b: int) -> str:
-    """Return a Seg/attr color name that renders approximately ``(r, g, b)``.
+    """Return a Seg/attr color name that renders ``(r, g, b)``.
 
-    The triple is mapped to the nearest xterm-256 cube color and a curses pair is
-    allocated for it on first use (cached, so repeated colors share one pair).
-    Falls back to the default foreground when the terminal lacks 256 colors or
-    pair slots run out. Must be called after init_colors() (i.e. during
-    rendering)."""
-    global _next_pair
+    Exact where the terminal can redefine colors, nearest-stock-cube where it
+    can't. The pair is allocated on first use and cached under the RGB triple,
+    so repeated colors share one pair. Falls back to the default foreground when
+    the terminal lacks 256 colors or slots/pairs run out. Must be called after
+    init_colors() (i.e. during rendering).
+    """
     if getattr(curses, "COLORS", 0) < 256:
         return ""
-    idx = _nearest_256(r, g, b)
-    name = f"x256:{idx}"
+    name = f"rgb:{r},{g},{b}"
     if name in _PAIRS:
         return name
-    if _next_pair >= getattr(curses, "COLOR_PAIRS", 256):
+    pair = _alloc(r, g, b)
+    if pair == 0:
         return ""
-    try:
-        curses.init_pair(_next_pair, idx, -1)
-    except curses.error:
-        return ""
-    _PAIRS[name] = _next_pair
+    _PAIRS[name] = pair
     _dynamic_names.add(name)
-    _next_pair += 1
     return name
 
 
