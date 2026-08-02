@@ -106,8 +106,13 @@ prompt you — after which the credential is cached and reconnects are automatic
 Controls Midea air conditioners over their local-LAN protocol via midea-local
 (the extracted core of Home Assistant's `midea_ac_lan` integration). Each
 connected unit runs its own persistent background thread doing heartbeats and
-state refreshes, so the cards reflect live state with no polling lag. Units are
-auto-discovered by LAN broadcast.
+parsing pushed state updates, so the cards reflect live state with no polling
+lag. Units are auto-discovered by LAN broadcast.
+
+`i` opens device info for the selected unit: every attribute and capability the
+protocol exposes, including fields the panel never renders (humidity, energy
+counters, runtime totals). The regular poll asks only for live status, so
+pressing `i` is what queries the unit for the rest.
 
 Config `[midea]`: `units` pins units by IP, allowing us to skip the
 broadcast-discovery scan and display the devices instantly. Also allows

@@ -270,12 +270,20 @@ class _FakeConnected:
     attributes: dict = {}
     capabilities = {"cool_mode": True, "auto_mode": True, "eco": True}
     _unsupported_protocol = ["MessageQueryAppliance"]
+    _message_protocol_version = 3
+    refresh_interval = 30
 
     def open(self):
         pass
 
     def refresh_status(self, check_protocol=False):
         pass
+
+    def set_refresh_interval(self, interval):
+        self.refresh_interval = interval
+
+    def build_send(self, message, query=False):
+        self.sent = [*getattr(self, "sent", []), type(message).__name__]
 
 
 def test_protocol_probe_result_is_never_cached(monkeypatch):
@@ -544,3 +552,82 @@ def test_settle_window_caps_the_fast_cadence(monkeypatch):
     assert ctl.settling
     ctl._settle_deadline -= midea.SETTLE_WINDOW + 1     # pretend the window elapsed
     assert not ctl.settling
+
+
+def test_library_refresh_is_disabled_at_connect(monkeypatch):
+    # midealocal's own 30s refresh sends all eight queries in build_query();
+    # only MessageQuery's reply carries anything that changes. _query_status
+    # takes the recurring job over, so the device thread's timer is switched
+    # off — zero, because _check_refresh gates on `0 < interval`.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+    dev = _FakeConnected()
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: dev)
+    ctl._discover_all()
+    assert dev.refresh_interval == 0
+
+
+def test_status_query_respects_its_own_cadence(monkeypatch):
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+    dev = _FakeConnected()
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: dev)
+    ctl._discover_all()
+
+    dev.sent = []
+    ctl._query_status(focused=True)
+    assert dev.sent == []                      # connect just asked; too soon to repeat
+    ctl._last_query[123] -= midea.STATUS_QUERY_INTERVAL_FOCUSED + 1
+    ctl._query_status(focused=True)
+    assert dev.sent == ["MessageQuery"]        # capabilities already known: status only
+
+
+def test_status_query_retries_capabilities_until_they_land(monkeypatch):
+    # Without the 30s refresh there is no other retry: a dropped B5 would
+    # never be re-asked and the card would render from dataclass defaults for
+    # the life of the connection.
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+
+    class _NoCaps(_FakeConnected):
+        capabilities: dict = {}
+
+    dev = _NoCaps()
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: dev)
+    ctl._discover_all()
+
+    dev.sent = []
+    ctl._last_query[123] -= midea.STATUS_QUERY_INTERVAL_IDLE + 1
+    ctl._query_status(focused=False)
+    assert dev.sent == ["MessageQuery", "MessageCapabilitiesQuery"]
+
+    dev.capabilities = {"cool_mode": True}     # they land
+    dev.sent = []
+    ctl._last_query[123] -= midea.STATUS_QUERY_INTERVAL_IDLE + 1
+    ctl._query_status(focused=False)
+    assert dev.sent == ["MessageQuery"]        # and are never asked for again
+
+
+def test_device_info_reports_attributes_and_capabilities(monkeypatch):
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}],
+                             {"123": dict(_CACHED_ENTRY)})
+
+    class _Live(_FakeConnected):
+        attributes = {"mode": 2, "power": True, "indoor_humidity": None}
+
+    dev = _Live()
+    monkeypatch.setattr(ctl, "_try_connect", lambda *a: dev)
+    ctl._discover_all()
+    ctl._refresh_snapshot()
+
+    assert ctl.device_info() is None           # closed until asked for
+    ctl.request_device_info(123)
+    info = ctl.device_info()
+    assert info is not None
+    title, lines = info
+    assert "device info" in title
+    body = "\n".join(lines)
+    assert "indoor_humidity" in body and "—" in body   # None renders, not hidden
+    assert "eco" in body and "cool_mode" in body       # capability flags listed
+    ctl.close_device_info()
+    assert ctl.device_info() is None
