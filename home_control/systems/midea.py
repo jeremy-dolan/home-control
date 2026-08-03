@@ -180,6 +180,16 @@ class MideaUnit:
     swing_mode: str = "OFF"       # OFF | VERTICAL
     target_temp_c: float = 24.0
     indoor_temp_c: float | None = None
+    # Condenser-side air rather than the weather — closer to a property of the
+    # machine than of the sky. Sampled over a single day against a public
+    # observation for the nearest city, with the unit's own run history only
+    # partly known, so trust the direction here well before the numbers:
+    # powered off it sat exactly on indoor_temp_c for 55 consecutive samples
+    # while the reference fell about a degree; running it separated from
+    # indoor by several degrees, read high against the reference, and drifted
+    # on something closer to the compressor's timescale than the weather's.
+    # Parsed because midea-local supplies it, and never rendered — if that
+    # changes, gate it on `power` and don't label it "outdoor".
     outdoor_temp_c: float | None = None
     fahrenheit: bool = True       # this unit's own display-unit preference
     eco: bool = False
