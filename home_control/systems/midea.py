@@ -67,6 +67,7 @@ from midealocal.devices import device_selector
 from midealocal.devices.ac import MideaACDevice
 from midealocal.devices.ac.message import MessageCapabilitiesQuery, MessageQuery
 from midealocal.discover import discover as midea_discover
+from midealocal.message import ListTypes, MessageResponse
 
 from .. import config
 from ..ui import (
@@ -125,6 +126,20 @@ FILL_GRACE = 1.5
 # are still reachable on demand, via the device-info popup.
 STATUS_QUERY_INTERVAL_FOCUSED = 3.0
 STATUS_QUERY_INTERVAL_IDLE = 15.0
+
+# The unit answers a status query with a C0 body and also pushes state of its
+# own accord in an A0 body. midealocal reads these two attributes from body
+# bytes 13 and 14 of either — but the two bodies only share a layout through
+# byte 9, and the push pads the rest with zeros, which parse as "filter clean"
+# and "display on". So each push contradicts the status reply until the next
+# one lands. Measured against a unit with its display physically off and
+# staying off: 59/59 status frames read it off, 11/11 pushes read it on, and
+# the panel's chip spent 9% of a 3-minute window wrong, in visible flickers of
+# up to 2s. midealocal's own offsets tell the same story — it reads smart_dry
+# from byte 13 in a push but byte 19 in a status reply, comfort_mode from 14
+# vs 22 — so byte 13 meaning dust in both is the odd one out. Let the status
+# reply own them (see _ignore_push_padding).
+_STATUS_ONLY_ATTRS = ("full_dust", "screen_display")
 
 TOKEN_CACHE_PATH = Path(
     os.environ.get("HOME_CONTROL_MIDEA_CACHE")
@@ -362,6 +377,31 @@ def _caps_ready(dev: MideaACDevice) -> bool:
     mode flag, so their absence means it hasn't."""
     caps = dev.capabilities or {}
     return any(k in caps for k in ("cool_mode", "heat_mode", "auto_mode", "dry_mode"))
+
+
+def _ignore_push_padding(dev: MideaACDevice) -> None:
+    """Stop the unit's A0 push frames from clobbering _STATUS_ONLY_ATTRS.
+    Install before ``dev.open()``, so no frame reaches the device thread's
+    parser first. Everything else a push carries is left alone: bytes 0-9 of
+    the two bodies do agree, and that is where power, mode, setpoint, fan and
+    swing come from."""
+    inner = dev.process_message
+
+    def process(msg: bytes) -> dict[str, Any]:
+        try:
+            pushed = MessageResponse(bytearray(msg)).body_type == ListTypes.A0
+        except Exception:
+            # Whatever this is, MessageACResponse is about to make the same
+            # judgement of it; let the library's own handling stand.
+            pushed = False
+        if not pushed:
+            return inner(msg)
+        keep = {k: dev._attributes[k] for k in _STATUS_ONLY_ATTRS}
+        status = inner(msg)
+        dev._attributes.update(keep)
+        return {k: v for k, v in status.items() if k not in _STATUS_ONLY_ATTRS}
+
+    dev.process_message = process  # type: ignore[method-assign]
 
 
 def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
@@ -624,6 +664,7 @@ class MideaController:
                 del self._units[stale_id]
             if dev is not None:
                 dev.daemon = True
+                _ignore_push_padding(dev)
                 dev.open()
                 self._prime(dev)
                 # Hand the recurring query over to _query_status. Zero disables
