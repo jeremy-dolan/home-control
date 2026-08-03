@@ -283,6 +283,8 @@ class _FakeConnected:
     _message_protocol_version = 3
     refresh_interval = 30
 
+    _attributes: dict = {}
+
     def open(self):
         pass
 
@@ -294,6 +296,9 @@ class _FakeConnected:
 
     def build_send(self, message, query=False):
         self.sent = [*getattr(self, "sent", []), type(message).__name__]
+
+    def process_message(self, msg):
+        return {}
 
 
 def test_protocol_probe_result_is_never_cached(monkeypatch):
@@ -641,3 +646,76 @@ def test_device_info_reports_attributes_and_capabilities(monkeypatch):
     assert "eco" in body and "cool_mode" in body       # capability flags listed
     ctl.close_device_info()
     assert ctl.device_info() is None
+# --- A0 push padding (see _STATUS_ONLY_ATTRS) --------------------------------
+
+# Real frames off a unit whose display was physically off and staying off, and
+# whose filter had just been reset. The status reply reports byte 14 as 0x70
+# ("display off"); the push pads the same byte with 0x00, which reads as
+# "display on". Captured 2026-08-02, ~/midea-samples/.
+_STATUS_FRAME = bytes.fromhex(
+    "aa23ac00000000000303c00148667f7f00300010046369007000000000000000000388b3"
+)
+_PUSH_FRAME = bytes.fromhex(
+    "aa22ac00000000000305a01940660000003000900007000000000000000000001e588e"
+)
+
+
+def _replay_device(patched: bool):
+    from midealocal.const import ProtocolVersion
+    from midealocal.devices.ac import MideaACDevice
+
+    dev = MideaACDevice(
+        name="replay", device_id=1, ip_address="0.0.0.0", port=6444,
+        token="", key="", device_protocol=ProtocolVersion.V3,
+        model="", subtype=0, customize="",
+    )
+    if patched:
+        midea._ignore_push_padding(dev)
+    return dev
+
+
+def test_push_frame_clobbers_display_without_the_shim():
+    # Documents the upstream behaviour the shim exists for: if this ever stops
+    # failing, midealocal fixed its A0 offsets and the shim can go.
+    dev = _replay_device(patched=False)
+    dev.process_message(_STATUS_FRAME)
+    assert dev.attributes["screen_display"] is False
+    dev.process_message(_PUSH_FRAME)
+    assert dev.attributes["screen_display"] is True, "push overwrote the status reply"
+
+
+def test_push_frame_leaves_status_only_attrs_alone():
+    dev = _replay_device(patched=True)
+    dev.process_message(_STATUS_FRAME)
+    assert dev.attributes["screen_display"] is False
+    dev.process_message(_PUSH_FRAME)
+    assert dev.attributes["screen_display"] is False
+    assert dev.attributes["full_dust"] is False
+
+
+def test_status_reply_still_owns_status_only_attrs():
+    # The shim must not latch: a stale value has to be correctable by the very
+    # next status reply, or a filter reset would never clear the badge.
+    dev = _replay_device(patched=True)
+    dev._attributes["screen_display"] = True
+    dev._attributes["full_dust"] = True
+    dev.process_message(_STATUS_FRAME)
+    assert dev.attributes["screen_display"] is False
+    assert dev.attributes["full_dust"] is False
+
+
+def test_push_frame_still_carries_the_fields_it_shares():
+    # Bytes 0-9 do agree between the two bodies, so a push must keep updating
+    # power/mode/setpoint — the shim is narrow, not a blanket ignore.
+    dev = _replay_device(patched=True)
+    dev.process_message(_PUSH_FRAME)
+    assert dev.attributes["power"] is True
+    assert dev.attributes["mode"] == 2
+    assert dev.attributes["target_temperature"] == 24.0
+
+
+def test_shim_reports_only_the_keys_it_kept():
+    dev = _replay_device(patched=True)
+    dev.process_message(_STATUS_FRAME)
+    status = dev.process_message(_PUSH_FRAME)
+    assert not set(status) & set(midea._STATUS_ONLY_ATTRS)
