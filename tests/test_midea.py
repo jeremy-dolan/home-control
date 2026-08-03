@@ -166,6 +166,32 @@ def test_card_rows_powered_on_unit_not_dimmed():
     assert any(not seg.dim for seg in rows[0])
 
 
+def test_header_shows_outside_temp_with_the_other_temperatures():
+    s = midea.MideaSystem()
+    u = _unit(power=True, mode="COOL", indoor_temp_c=24.0, outdoor_temp_c=23.0, target_temp_c=24.0)
+    text = "".join(seg.text for seg in s._card_rows(u, is_selected=False, width=76)[0])
+    assert "Outside AC 73°F" in text
+    assert text.index("Outside AC") < text.index("→")   # ahead of indoor → target
+
+
+def test_header_omits_outside_temp_when_the_unit_never_reports_it():
+    s = midea.MideaSystem()
+    u = _unit(power=True, mode="COOL", indoor_temp_c=24.0, outdoor_temp_c=None)
+    text = "".join(seg.text for seg in s._card_rows(u, is_selected=False, width=76)[0])
+    assert "Outside" not in text and "—" not in text
+
+
+def test_header_fits_with_every_optional_field_present():
+    # filter alert + error code + outside temp is the widest the header gets;
+    # it has to survive at the 80-column terminal the project designs for.
+    s = midea.MideaSystem()
+    u = _unit(power=True, mode="COOL", name="Living Room", filter_alert=True, error_code=5,
+              indoor_temp_c=24.0, outdoor_temp_c=23.0, target_temp_c=24.0)
+    text = "".join(seg.text for seg in s._card_rows(u, is_selected=True, width=76)[0])
+    assert len(text) <= 76
+    assert "filter!" in text and "err 5" in text and "Outside AC" in text
+
+
 def test_card_rows_uncontacted_unit_is_single_connecting_line():
     # A never-reached placeholder must not render fabricated control rows —
     # just one dimmed header line saying it's connecting.
