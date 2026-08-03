@@ -4,9 +4,11 @@ midea_ac_lan integration).
 Split into:
   * MideaController — thin sync wrapper. midea-local's device objects are
     plain ``threading.Thread`` subclasses: each connected unit
-    runs its own persistent background thread doing heartbeats/refreshes and
+    runs its own persistent background thread doing heartbeats and
     parsing pushed state updates, and ``dev.attributes`` is a live-updated
-    dict you can read with zero network I/O. Only the one-time cloud login
+    dict you can read with zero network I/O. That thread's own 30s refresh
+    is switched off at connect and replaced by ``_query_status`` — see
+    STATUS_QUERY_INTERVAL_* for why one query beats its eight. Only the one-time cloud login
     (V3 token/key pairing) is ``async def`` — done via a single blocking
     ``asyncio.run(...)`` call, no dedicated event-loop thread needed.
 
@@ -25,7 +27,9 @@ Split into:
     expanded as a 3-line card. ↕ picks which *online* unit hotkeys act on;
     p/m/f/s/e/t/d directly toggle/cycle that unit's fields; ←→ nudges its
     target temperature. No Hue-style drill-in dialog — there are only ever a
-    handful of AC units, so everything fits on screen at once.
+    handful of AC units, so everything fits on screen at once. `i` raises a
+    device-info popup: the whole attribute dict plus capability flags, and
+    the on-demand query that fills in the fields the poll never asks for.
 
 Set HOME_CONTROL_MOCK=1 to render 3 fixture units with no network at all.
 
@@ -79,7 +83,7 @@ from ..ui import (
     toggle_dot,
     wrap,
 )
-from .base import System, VoiceAction
+from .base import Popup, System, VoiceAction
 
 # Minimum gap between discovery attempts. A failure here can be a cloud-side
 # auth rate limit — retrying every poll tick (as fast as 1s when focused)
@@ -109,6 +113,18 @@ SETTLE_WINDOW = 15.0
 # outlast the last one, not just the first. There's no ack to wait on for the
 # follow-up burst, so hold the fast cadence briefly after sending it.
 FILL_GRACE = 1.5
+
+# midealocal's device thread refreshes every 30s by sending all eight queries
+# in build_query(). Only MessageQuery's C0 reply carries anything that changes:
+# the two B5 frames are static capabilities, and the other five are either
+# ignored by the hardware or answered with empty payloads (energy counters,
+# runtime totals, humidity). That refresh is switched off at connect and
+# replaced by _query_status(), so the recurring traffic is the one reply the
+# cards are built from — a quarter of the packets when idle, and ten times
+# fresher than 30s while you are looking at it. The rarely-changing replies
+# are still reachable on demand, via the device-info popup.
+STATUS_QUERY_INTERVAL_FOCUSED = 3.0
+STATUS_QUERY_INTERVAL_IDLE = 15.0
 
 TOKEN_CACHE_PATH = Path(
     os.environ.get("HOME_CONTROL_MIDEA_CACHE")
@@ -164,6 +180,16 @@ class MideaUnit:
     swing_mode: str = "OFF"       # OFF | VERTICAL
     target_temp_c: float = 24.0
     indoor_temp_c: float | None = None
+    # Condenser-side air rather than the weather — closer to a property of the
+    # machine than of the sky. Sampled over a single day against a public
+    # observation for the nearest city, with the unit's own run history only
+    # partly known, so trust the direction here well before the numbers:
+    # powered off it sat exactly on indoor_temp_c for 55 consecutive samples
+    # while the reference fell about a degree; running it separated from
+    # indoor by several degrees, read high against the reference, and drifted
+    # on something closer to the compressor's timescale than the weather's.
+    # Parsed because midea-local supplies it, and never rendered — if that
+    # changes, gate it on `power` and don't label it "outdoor".
     outdoor_temp_c: float | None = None
     fahrenheit: bool = True       # this unit's own display-unit preference
     eco: bool = False
@@ -234,6 +260,60 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
     if c is None:
         return "—"
     return f"{round(_c_to_f(c)) if fahrenheit else round(c)}°{'F' if fahrenheit else 'C'}"
+
+
+# ---------------------------------------------------------------------------
+# Device info (the `i` popup)
+#
+# Popups are plain unstyled text clipped to HELP_WIDTH, and the shell centres
+# them without scrolling, so this view has to fit the 45-row floor the project
+# designs for. Two columns of INFO_COL keep the whole of midea-local's
+# attribute dict inside ~30 lines; capabilities are wrapped name lists rather
+# than one flag per line for the same reason.
+# ---------------------------------------------------------------------------
+
+INFO_COL = 33
+
+
+def _fmt_info(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _clip(text: str, width: int) -> str:
+    """Trim to `width`, marking the cut — a silently shortened device id reads
+    as a real (wrong) number rather than a truncated one."""
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _info_rows(pairs: list[tuple[str, Any]], label_w: int, value_w: int) -> list[str]:
+    """Pack label/value pairs two to a line.
+
+    Widths are per-section because the two sections have opposite shapes:
+    connection keys are short with long values (a 15-digit device id), while
+    midea-local's attribute names run to 27 characters against values that are
+    a number or yes/no.
+    """
+    cells = [
+        f" {_clip(k, label_w):<{label_w}}{_clip(_fmt_info(v), value_w):>{value_w}}"
+        for k, v in pairs
+    ]
+    if len(cells) % 2:
+        cells.append("")
+    return [(cells[i] + cells[i + 1]).rstrip() for i in range(0, len(cells), 2)]
+
+
+def _info_names(label: str, names: list[str], width: int) -> list[str]:
+    """A wrapped, indented name list — used for the capability flags."""
+    if not names:
+        return [f"  {label} —"]
+    body = wrap(" ".join(sorted(names)), max(10, width - 8))
+    return [f"  {label} {body[0]}"] + [f"       {line}" for line in body[1:]]
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +458,8 @@ class MideaController:
         self._devices: dict[int, MideaACDevice] = {}
         self._ips: dict[int, str] = {}
         self._filled: dict[int, float] = {}   # device id -> when its follow-up burst was sent
+        self._last_query: dict[int, float] = {}  # device id -> when _query_status last asked it
+        self._info_id: int | None = None     # unit whose device-info popup is open, if any
         self._settle_deadline = 0.0      # poll fast until this time (see SETTLE_WINDOW)
         self._token_cache = _load_token_cache()
         self.error = ""
@@ -544,6 +626,12 @@ class MideaController:
                 dev.daemon = True
                 dev.open()
                 self._prime(dev)
+                # Hand the recurring query over to _query_status. Zero disables
+                # the device thread's own refresh (_check_refresh gates on
+                # `0 < interval`) without touching its heartbeat, which runs on
+                # a separate timer and keeps the socket alive.
+                dev.set_refresh_interval(0)
+                self._last_query[did] = time.time()
                 self._settle_deadline = time.time() + SETTLE_WINDOW
                 self._devices[did] = dev
                 self._ips[did] = d["ip_address"]
@@ -632,6 +720,32 @@ class MideaController:
             except Exception:
                 self._filled.pop(did, None)
 
+    def _query_status(self, focused: bool) -> None:
+        """Ask each connected unit for the one reply that carries live state.
+
+        Stands in for the device thread's own refresh, switched off at connect
+        (see STATUS_QUERY_INTERVAL_*). Capabilities are static, so they are
+        re-asked only until they land: without that retry a dropped B5 would
+        never be requested again and the card would render from dataclass
+        defaults for the life of the connection — the same bare Fan/Auto row
+        the cached-unsupported-list experiment produced (see the token cache
+        comment above)."""
+        interval = STATUS_QUERY_INTERVAL_FOCUSED if focused else STATUS_QUERY_INTERVAL_IDLE
+        now = time.time()
+        for did, dev in self._devices.items():
+            if now - self._last_query.get(did, 0.0) < interval:
+                continue
+            self._last_query[did] = now
+            try:
+                version = dev._message_protocol_version
+                dev.build_send(MessageQuery(version), query=True)
+                if not _caps_ready(dev):
+                    dev.build_send(MessageCapabilitiesQuery(version), query=True)
+            except Exception:
+                # A dead socket here just means no refresh this tick; the
+                # device thread's own connect loop owns getting it back.
+                pass
+
     def poll(self, focused: bool) -> None:
         if self.mock:
             self._load_mock()
@@ -639,6 +753,7 @@ class MideaController:
         self._discover_all()
         self._refresh_snapshot()
         self._fill_in()
+        self._query_status(focused)
 
     def _fully_read(self, did: int, dev: MideaACDevice, now: float) -> bool:
         """Has every wave of this unit's first picture arrived — status,
@@ -663,6 +778,72 @@ class MideaController:
     def snapshot(self) -> dict[int, MideaUnit]:
         with self._lock:
             return dict(self._units)
+
+    # -- device info popup ------------------------------------------------
+    def request_device_info(self, unit_id: int) -> None:
+        """Open the info popup for a unit and ask it for everything.
+
+        The recurring poll asks only for live status, so the rest of what the
+        protocol exposes — energy counters, runtime totals, humidity, the
+        second capabilities frame — is fetched here, at the keypress, by the
+        one full eight-query burst. Fire-and-forget as everywhere else:
+        device_info() re-reads the attribute dict on every frame, so each
+        reply appears in the open popup as it lands."""
+        self._info_id = unit_id
+        dev = self._devices.get(unit_id)
+        if dev is None:
+            return
+        try:
+            dev.refresh_status()
+        except Exception:
+            pass
+
+    def close_device_info(self) -> None:
+        self._info_id = None
+
+    def device_info(self) -> tuple[str, list[str]] | None:
+        """(title, lines) for the open info popup, or None when it's closed."""
+        if self._info_id is None:
+            return None
+        unit = self.snapshot().get(self._info_id)
+        if unit is None:
+            return None
+        dev = self._devices.get(self._info_id)
+        cached = self._token_cache.get(str(self._info_id), {})
+
+        lines = ["CONNECTION"]
+        lines += _info_rows([
+            ("ip", unit.ip or "—"), ("port", cached.get("port")),
+            ("device id", unit.id), ("protocol", f"v{cached.get('protocol', '?')}"),
+            ("model", cached.get("model") or "—"), ("firmware name", dev.name if dev else "—"),
+            ("online", unit.online), ("caps known", unit.caps_known),
+        ], label_w=13, value_w=17)
+
+        attrs = dict(dev.attributes) if dev is not None else {}
+        lines += ["", "ATTRIBUTES"]
+        if attrs:
+            lines += _info_rows(sorted(attrs.items()), label_w=22, value_w=8)
+        else:
+            # Mock mode has no device object, so fall back to the cached unit —
+            # the same fields, minus the ones only the raw protocol carries.
+            lines += _info_rows([
+                ("power", unit.power), ("mode", unit.mode),
+                ("fan_speed", unit.fan_speed), ("swing_mode", unit.swing_mode),
+                ("target_temp", _fmt_temp(unit.target_temp_c, unit.fahrenheit)),
+                ("indoor_temp", _fmt_temp(unit.indoor_temp_c, unit.fahrenheit)),
+                ("outdoor_temp", _fmt_temp(unit.outdoor_temp_c, unit.fahrenheit)),
+                ("eco", unit.eco), ("turbo", unit.turbo),
+                ("display_on", unit.display_on), ("filter_alert", unit.filter_alert),
+                ("error_code", unit.error_code),
+            ], label_w=22, value_w=8)
+
+        caps = dict(dev.capabilities or {}) if dev is not None else {}
+        if caps:
+            on = [k for k, v in caps.items() if v]
+            lines += ["", f"CAPABILITIES ({len(on)} of {len(caps)})"]
+            lines += _info_names("on: ", on, INFO_COL * 2)
+            lines += _info_names("off:", [k for k, v in caps.items() if not v], INFO_COL * 2)
+        return f"{unit.name} — device info", lines
 
     def target_c_for(self, unit_id: int, display_value: float) -> float:
         """Convert a setpoint typed/stepped in the unit's own display scale to
@@ -739,19 +920,21 @@ class MideaController:
             self._units = {
                 151732604866906: MideaUnit(
                     id=151732604866906, ip="192.168.1.50", name="Living Room", online=True,
-                    contacted=True, power=True, mode="COOL", fan_speed="MEDIUM", swing_mode="OFF",
-                    target_temp_c=24.0, indoor_temp_c=24.0, outdoor_temp_c=23.5, fahrenheit=True,
-                    display_on=True,  # keep one demo unit with its display on
+                    contacted=True, caps_known=True, power=True, mode="COOL", fan_speed="MEDIUM",
+                    swing_mode="OFF", target_temp_c=24.0, indoor_temp_c=24.0, outdoor_temp_c=23.5,
+                    fahrenheit=True, display_on=True,  # keep one demo unit with its display on
                 ),
                 151732604866907: MideaUnit(
                     id=151732604866907, ip="192.168.1.51", name="Bedroom", online=True,
-                    contacted=True, power=True, mode="FAN_ONLY", fan_speed="LOW", swing_mode="VERTICAL",
-                    target_temp_c=22.0, indoor_temp_c=26.0, outdoor_temp_c=23.5, fahrenheit=True,
-                    eco=True, display_on=False, filter_alert=True,
+                    contacted=True, caps_known=True, power=True, mode="FAN_ONLY", fan_speed="LOW",
+                    swing_mode="VERTICAL", target_temp_c=22.0, indoor_temp_c=26.0,
+                    outdoor_temp_c=23.5, fahrenheit=True, eco=True, display_on=False,
+                    filter_alert=True,
                 ),
                 151732604866908: MideaUnit(
                     id=151732604866908, ip="192.168.1.52", name="Office", online=False,
-                    contacted=True, power=False, fahrenheit=True,  # offline, showing last-known
+                    contacted=True, caps_known=True, power=False,
+                    fahrenheit=True,  # offline, showing last-known
                 ),
             }
 
@@ -978,6 +1161,17 @@ class MideaSystem(System):
             return [Seg(f"{label} {dot}", self.color, bold=True)]
         return [Seg(label[0], self.color, bold=True), Seg(f"{label[1:]} {dot}", dim=True)]
 
+    # -- device info popup ---------------------------------------------
+    def pending_popup(self) -> Popup | None:
+        info = self.ctl.device_info()
+        if info is None:
+            return None
+        title, lines = info
+        return Popup(title=title, lines=lines, color=self.color)
+
+    def dismiss_popup(self) -> None:
+        self.ctl.close_device_info()
+
     # -- toolbar/help --------------------------------------------------
     def toolbar_line(self) -> Line | None:
         if self._num_buf is not None:
@@ -985,7 +1179,7 @@ class MideaSystem(System):
                             hint("ESC", "cancel", self.color))
         return hint_row(
             hint("↕", "select device", self.color), hint("←→", "temp", self.color),
-            hint("ENTER", "power", self.color),
+            hint("ENTER", "power", self.color), hint("i", "info", self.color),
         )
 
     def help_notes(self) -> list[str]:
@@ -994,9 +1188,9 @@ class MideaSystem(System):
             "Controls Midea air conditioners over their local-LAN protocol "
             "via midea-local (the extracted core of Home Assistant's "
             "midea_ac_lan integration). Each connected unit runs its own "
-            "persistent background thread doing heartbeats and state "
-            "refreshes, so the cards reflect live state with no polling lag. "
-            "Units are auto-discovered by LAN broadcast.",
+            "persistent background thread doing heartbeats and parsing "
+            "pushed state updates, so the cards reflect live state with no "
+            "polling lag. Units are auto-discovered by LAN broadcast.",
             "Config [midea]: units pins units by IP, allowing us to skip the "
             "broadcast-discovery scan and display the devices instantly. Also "
             "allows assigning each a friendly name that overrides the "
@@ -1005,6 +1199,11 @@ class MideaSystem(System):
             "cached locally afterward so the cloud is only touched once; set "
             "account and password to your Midea app login, and cloud to "
             'match which app it belongs to ("nethome_plus" or "smarthome").',
+            "i opens device info for the selected unit: every attribute and "
+            "capability the protocol exposes, including the fields the panel "
+            "never renders (humidity, energy counters, runtime totals). The "
+            "regular poll asks only for live status, so pressing i is what "
+            "queries the unit for the rest; values fill in as replies land.",
         ]
 
     # -- input -----------------------------------------------------------
@@ -1040,6 +1239,8 @@ class MideaSystem(System):
             self._toggle(u, "turbo", u.turbo)
         elif key == ord("d") and u.supports_display_control:
             self._toggle(u, "display_on", u.display_on)
+        elif key == ord("i"):
+            self.ctl.request_device_info(u.id)
         elif ord("0") <= key <= ord("9"):
             self._num_buf = chr(key)
         else:
