@@ -170,15 +170,15 @@ def test_header_shows_outside_temp_with_the_other_temperatures():
     s = midea.MideaSystem()
     u = _unit(power=True, mode="COOL", indoor_temp_c=24.0, outdoor_temp_c=23.0, target_temp_c=24.0)
     text = "".join(seg.text for seg in s._card_rows(u, is_selected=False, width=76)[0])
-    assert "Outside AC 73°F" in text
-    assert text.index("Outside AC") < text.index("→")   # ahead of indoor → target
+    assert "Unit ext. 73°F" in text
+    assert text.index("Unit ext.") < text.index("→")   # ahead of indoor → target
 
 
 def test_header_omits_outside_temp_when_the_unit_never_reports_it():
     s = midea.MideaSystem()
     u = _unit(power=True, mode="COOL", indoor_temp_c=24.0, outdoor_temp_c=None)
     text = "".join(seg.text for seg in s._card_rows(u, is_selected=False, width=76)[0])
-    assert "Outside" not in text and "—" not in text
+    assert "Unit ext." not in text and "—" not in text
 
 
 def test_header_fits_with_every_optional_field_present():
@@ -189,7 +189,7 @@ def test_header_fits_with_every_optional_field_present():
               indoor_temp_c=24.0, outdoor_temp_c=23.0, target_temp_c=24.0)
     text = "".join(seg.text for seg in s._card_rows(u, is_selected=True, width=76)[0])
     assert len(text) <= 76
-    assert "filter!" in text and "err 5" in text and "Outside AC" in text
+    assert "filter!" in text and "err 5" in text and "Unit ext." in text
 
 
 def test_card_rows_uncontacted_unit_is_single_connecting_line():

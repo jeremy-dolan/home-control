@@ -201,7 +201,7 @@ class MideaUnit:
     # condenser swung 8C and the discharge pipe 14C while this moved 0.5C —
     # one quantization step. Idle or working it sat 2.5-3.0C above a public
     # observation for the nearest city, and never once equalled
-    # indoor_temp_c. Rendered on the card header as "Outside AC" — the
+    # indoor_temp_c. Rendered on the card header as "Unit ext." — the
     # qualifier is the caveat: it is outdoor air, but the unit's own
     # microclimate rather than the local weather, so don't relabel it as a
     # plain outside temperature. One unit, one day; a second unit reporting
@@ -1150,12 +1150,12 @@ class MideaSystem(System):
         else:
             tgt_text = _fmt_temp(u.target_temp_c, u.fahrenheit)
         if u.outdoor_temp_c is not None:
-            # "Outside AC", not "Outside": the reading is the unit's own
+            # "Unit ext.", not "Outside": the reading is the unit's own
             # microclimate and runs a couple of degrees above the actual
             # outside air (see outdoor_temp_c). Dropped entirely rather than
             # shown as "—" when absent, so the header doesn't carry a column
             # of nothing on a unit that never reports it.
-            right.append(Seg(f"Outside AC {_fmt_temp(u.outdoor_temp_c, u.fahrenheit)}   ", dim=True))
+            right.append(Seg(f"Unit ext. {_fmt_temp(u.outdoor_temp_c, u.fahrenheit)}   ", dim=True))
         right.append(Seg(f"{_fmt_temp(u.indoor_temp_c, u.fahrenheit)} → ", dim=True))
         right.append(Seg(tgt_text, self.color if is_selected else "", bold=is_selected))
         return justify(left, right, width)
