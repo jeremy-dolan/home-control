@@ -1064,12 +1064,22 @@ class MideaSystem(System):
         label, state = unit_badge(u)
         color = badge_color(state, self.color)
         left = [Seg(label, color, bold=(state == BADGE_ACTIVE)), Seg(f"  {u.name}")]
-        if not u.online or not u.power:
+        if not u.online:
             return left
-        cur = _fmt_temp(u.indoor_temp_c, u.fahrenheit)
-        tgt = _fmt_temp(u.target_temp_c, u.fahrenheit)
-        right = [Seg(f"{cur} → {tgt}   {u.fan_speed.replace('_', ' ').title()}", dim=True)]
-        return justify(left, right, width)
+        ext = ""
+        if u.outdoor_temp_c is not None:
+            ext = f"  (exterior: {_fmt_temp(u.outdoor_temp_c, u.fahrenheit)})"
+        if u.power:
+            cur = _fmt_temp(u.indoor_temp_c, u.fahrenheit)
+            tgt = _fmt_temp(u.target_temp_c, u.fahrenheit)
+            right = f"{cur} → {tgt}   {u.fan_speed.replace('_', ' ').title()}{ext}"
+        elif u.indoor_temp_c is None and not ext:
+            return left
+        else:
+            # Powered off the sensors still read, but target and fan describe
+            # nothing the unit is doing, so the row carries temperatures alone.
+            right = f"{_fmt_temp(u.indoor_temp_c, u.fahrenheit)}{ext}"
+        return justify(left, [Seg(right, dim=True)], width)
 
     # -- rendering (expanded/focused box) --------------------------------
     def render_expanded(self, region: Region) -> None:

@@ -192,6 +192,51 @@ def test_header_fits_with_every_optional_field_present():
     assert "filter!" in text and "err 5" in text and "Unit ext." in text
 
 
+def _collapsed(s: midea.MideaSystem, u: midea.MideaUnit, width: int = 76) -> str:
+    return "".join(seg.text for seg in s._unit_row(u, width))
+
+
+def test_collapsed_row_powered_off_shows_temperatures_without_target_or_fan():
+    s = midea.MideaSystem()
+    u = _unit(power=False, indoor_temp_c=26.0, outdoor_temp_c=28.5)
+    text = _collapsed(s, u)
+    assert "79°F  (exterior: 83°F)" in text
+    assert "→" not in text and "Auto" not in text
+
+
+def test_collapsed_row_powered_on_keeps_target_and_fan_before_exterior():
+    s = midea.MideaSystem()
+    u = _unit(power=True, mode="COOL", indoor_temp_c=26.0, target_temp_c=22.0,
+              outdoor_temp_c=28.5, fan_speed="AUTO")
+    text = _collapsed(s, u)
+    assert "79°F → 72°F   Auto  (exterior: 83°F)" in text
+
+
+def test_collapsed_row_omits_exterior_when_the_unit_never_reports_it():
+    s = midea.MideaSystem()
+    on = _collapsed(s, _unit(power=True, mode="COOL", indoor_temp_c=26.0,
+                             target_temp_c=22.0, outdoor_temp_c=None))
+    off = _collapsed(s, _unit(power=False, indoor_temp_c=26.0, outdoor_temp_c=None))
+    assert "exterior" not in on and "exterior" not in off
+    assert "79°F" in off
+
+
+def test_collapsed_row_off_with_no_readings_is_badge_and_name_only():
+    s = midea.MideaSystem()
+    text = _collapsed(s, _unit(power=False, indoor_temp_c=None, outdoor_temp_c=None))
+    assert text.strip() == "● OFF   LR"
+
+
+def test_collapsed_row_fits_with_every_optional_field_present():
+    # Longest name the 80-column terminal allows alongside target, fan and the
+    # exterior reading; a wider label here would push the row off the edge.
+    s = midea.MideaSystem()
+    u = _unit(power=True, mode="COOL", name="Upstairs Guest Bedroom",
+              indoor_temp_c=26.0, target_temp_c=22.0, outdoor_temp_c=28.5,
+              fan_speed="MEDIUM")
+    assert len(_collapsed(s, u)) <= 76
+
+
 def test_card_rows_uncontacted_unit_is_single_connecting_line():
     # A never-reached placeholder must not render fabricated control rows —
     # just one dimmed header line saying it's connecting.
