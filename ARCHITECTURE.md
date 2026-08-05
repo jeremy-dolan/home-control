@@ -16,12 +16,13 @@ source .venv/bin/activate      # venv already set up with project + dev deps
 pip install -e ".[dev]"        # ruff/pyright/pytest live in the `dev` extra, not the base install
 home-control                   # run the TUI (entry point: home_control.app:run)
 pytest                         # run the test suite
-PYTHONPATH=$PWD pytest         # from a worktree: the editable install points at the main checkout
+python3 -m pytest              # from a worktree: `-m` puts cwd first (bare `pytest` hits the main checkout)
 pytest tests/test_midea.py     # run a single test file
 pytest tests/test_midea.py -k some_test_name
 ruff check .                    # lint (line-length 120, extend-select I, UP)
 pyright                         # type check (basic mode)
 git config core.hooksPath .githooks   # one-time, per clone: enable the hooks
+git config push.default upstream      # one-time, per clone: worktree branches push to their upstream
 ```
 
 ## The System contract

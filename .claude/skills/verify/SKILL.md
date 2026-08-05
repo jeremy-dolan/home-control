@@ -67,9 +67,14 @@ tmux -L hcverify new-session -d -x 80 -y 50 \
 
 Gotchas:
 - The venv's `home-control` entry point is an editable install of the
-  **main checkout** — from a worktree you must set `PYTHONPATH=$PWD` (cwd
-  precedes the `.pth` entry) or you'll run the old code. Sanity-check with
-  `python -c 'import home_control; print(home_control.__file__)'` first.
+  **main checkout**, and console scripts put `.venv/bin` on `sys.path`
+  rather than the cwd — so from a worktree, bare `home-control` (and bare
+  `pytest`) run the main checkout's code. The command above sidesteps that
+  twice over, by `cd`-ing to `$PWD` before a `-c` invocation and by setting
+  `PYTHONPATH=$PWD`; either alone is enough. Don't sanity-check this with
+  `python -c 'import home_control; print(home_control.__file__)'` — `-c`
+  puts the cwd first, so from a worktree it prints the worktree either way
+  and cannot detect the failure it is meant to catch.
 - `HOME_CONTROL_MOCK=1` mocks every system wired into the shell (Hue, Sonos,
   Roku, Router, Midea) — none hit the real LAN or need network access. Midea
   gives 3 fixture units (Living Room on/COOL, Bedroom on/FAN_ONLY+filter
