@@ -195,16 +195,17 @@ class MideaUnit:
     swing_mode: str = "OFF"       # OFF | VERTICAL
     target_temp_c: float = 24.0
     indoor_temp_c: float | None = None
-    # Condenser-side air rather than the weather — closer to a property of the
-    # machine than of the sky. Sampled over a single day against a public
-    # observation for the nearest city, with the unit's own run history only
-    # partly known, so trust the direction here well before the numbers:
-    # powered off it sat exactly on indoor_temp_c for 55 consecutive samples
-    # while the reference fell about a degree; running it separated from
-    # indoor by several degrees, read high against the reference, and drifted
-    # on something closer to the compressor's timescale than the weather's.
-    # Parsed because midea-local supplies it, and never rendered — if that
-    # changes, gate it on `power` and don't label it "outdoor".
+    # Outdoor air, reading high — not a machine temperature. It matched
+    # midea-local 6.11.1's outdoor_ambient_temperature in 52 of 55 samples,
+    # and across a full pulldown (compressor 43->12Hz, logged per sample) the
+    # condenser swung 8C and the discharge pipe 14C while this moved 0.5C —
+    # one quantization step. Idle or working it sat 2.5-3.0C above a public
+    # observation for the nearest city, and never once equalled
+    # indoor_temp_c. Rendered on the card header as "Unit ext." — the
+    # qualifier is the caveat: it is outdoor air, but the unit's own
+    # microclimate rather than the local weather, so don't relabel it as a
+    # plain outside temperature. One unit, one day; a second unit reporting
+    # a very different offset would be worth knowing about.
     outdoor_temp_c: float | None = None
     fahrenheit: bool = True       # this unit's own display-unit preference
     eco: bool = False
@@ -1063,12 +1064,22 @@ class MideaSystem(System):
         label, state = unit_badge(u)
         color = badge_color(state, self.color)
         left = [Seg(label, color, bold=(state == BADGE_ACTIVE)), Seg(f"  {u.name}")]
-        if not u.online or not u.power:
+        if not u.online:
             return left
-        cur = _fmt_temp(u.indoor_temp_c, u.fahrenheit)
-        tgt = _fmt_temp(u.target_temp_c, u.fahrenheit)
-        right = [Seg(f"{cur} → {tgt}   {u.fan_speed.replace('_', ' ').title()}", dim=True)]
-        return justify(left, right, width)
+        ext = ""
+        if u.outdoor_temp_c is not None:
+            ext = f"  (exterior: {_fmt_temp(u.outdoor_temp_c, u.fahrenheit)})"
+        if u.power:
+            cur = _fmt_temp(u.indoor_temp_c, u.fahrenheit)
+            tgt = _fmt_temp(u.target_temp_c, u.fahrenheit)
+            right = f"{cur} → {tgt}   {u.fan_speed.replace('_', ' ').title()}{ext}"
+        elif u.indoor_temp_c is None and not ext:
+            return left
+        else:
+            # Powered off the sensors still read, but target and fan describe
+            # nothing the unit is doing, so the row carries temperatures alone.
+            right = f"{_fmt_temp(u.indoor_temp_c, u.fahrenheit)}{ext}"
+        return justify(left, [Seg(right, dim=True)], width)
 
     # -- rendering (expanded/focused box) --------------------------------
     def render_expanded(self, region: Region) -> None:
@@ -1148,6 +1159,13 @@ class MideaSystem(System):
             tgt_text = f"{self._num_buf}_"
         else:
             tgt_text = _fmt_temp(u.target_temp_c, u.fahrenheit)
+        if u.outdoor_temp_c is not None:
+            # "Unit ext.", not "Outside": the reading is the unit's own
+            # microclimate and runs a couple of degrees above the actual
+            # outside air (see outdoor_temp_c). Dropped entirely rather than
+            # shown as "—" when absent, so the header doesn't carry a column
+            # of nothing on a unit that never reports it.
+            right.append(Seg(f"Unit ext. {_fmt_temp(u.outdoor_temp_c, u.fahrenheit)}   ", dim=True))
         right.append(Seg(f"{_fmt_temp(u.indoor_temp_c, u.fahrenheit)} → ", dim=True))
         right.append(Seg(tgt_text, self.color if is_selected else "", bold=is_selected))
         return justify(left, right, width)
