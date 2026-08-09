@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 
 from .. import config
 from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, hint, hint_row, select_row
-from .base import System, VoiceAction
+from .base import CONNECTING, GRACE_ATTEMPTS, Reachability, System, VoiceAction
 
 ECP_PORT = 8060
 # Steady-state timeout for refresh polls and keypress/launch commands. Keep it
@@ -43,8 +43,9 @@ HTTP_TIMEOUT = 2  # seconds
 CONNECT_TIMEOUT = 5  # seconds
 # Consecutive failed refreshes tolerated before we consider the device gone. A
 # single missed poll is almost always a transient blip, not a disconnect — don't
-# tear down the panel for it.
-RECONNECT_GRACE = 3
+# tear down the panel for it. This panel's tolerance became every panel's:
+# `base.GRACE_ATTEMPTS` is the same number, named once.
+RECONNECT_GRACE = GRACE_ATTEMPTS
 # Power state lives in device-info, which is far larger than the two steady-state
 # queries (~3.5KB vs ~300B). Standby transitions are human-initiated and slow, so
 # re-read it on its own throttle rather than on every refresh.
@@ -151,11 +152,13 @@ class RokuController:
         self.auto = not self.ip      # whether the IP came from discovery (vs config)
         self.port = ECP_PORT
         self._lock = threading.Lock()
-        self.connected = False
-        self.ever_connected = False  # latches once we've seen the device at least once
-        self.fail_count = 0          # consecutive failed refreshes (see RECONNECT_GRACE)
+        # Grace here is what let a box waking from standby stay on "Connecting..."
+        # instead of reading as a fault; it now also decides when to stop waiting
+        # and say why, which is what the other panels never did.
+        self.reach = Reachability(grace=RECONNECT_GRACE)
         self.discovered_count = 0    # verified Rokus seen in the last SSDP sweep
-        self.error = ""
+        self.error = ""              # last command failure; see `reach` for the link itself
+        self._last_io_error = ""     # last network/parse failure, for `reach`'s message
         self.device = RokuDevice()
         self.media = RokuMedia()
         self.apps: list[tuple[str, str]] = []
@@ -166,12 +169,24 @@ class RokuController:
     def base_url(self) -> str:
         return f"http://{self.ip}:{self.port}"
 
+    @property
+    def connected(self) -> bool:
+        """Whether the cached snapshot is worth drawing or commanding."""
+        return self.reach.has_values
+
+    @property
+    def ever_connected(self) -> bool:
+        """True once we've seen this box at least once, which is what separates
+        "reconnecting..." from a box we've never reached."""
+        return self.reach.ever
+
     # -- polling (background thread) ---------------------------------------
     def poll(self, focused: bool) -> None:
         if self.mock:
             self._load_mock()
             return
         if not self.connected and not self._connect():
+            self.reach.failed(self._last_io_error)
             return
         self._refresh()
 
@@ -202,9 +217,7 @@ class RokuController:
                 power_mode=info.findtext("power-mode") or "",
             )
             self._power_checked = time.monotonic()
-            self.connected = True
-            self.ever_connected = True
-            self.fail_count = 0
+            self.reach.succeeded()
             self.error = ""
         # The Apps column needs the installed list up front, not only when the
         # apps sub-mode is opened. Runs outside the lock (load_apps locks itself).
@@ -216,11 +229,9 @@ class RokuController:
         media = self._get_xml("media-player")
         if active is None and media is None:
             # Transient blip: keep the last-known snapshot and the panel intact.
-            # Only after RECONNECT_GRACE consecutive misses do we treat it as gone.
+            # Only past grace does `reach` stop vouching for those values.
             with self._lock:
-                self.fail_count += 1
-                if self.fail_count >= RECONNECT_GRACE:
-                    self.connected = False
+                self.reach.failed(self._last_io_error)
             return
         app_name, home = "", False
         if active is not None:
@@ -241,7 +252,7 @@ class RokuController:
             pos = _fmt_ms(media.findtext("position"))
             dur = _fmt_ms(media.findtext("duration"))
         with self._lock:
-            self.fail_count = 0
+            self.reach.succeeded()
             self.media = RokuMedia(state=state, app=app_name, home=home, position=pos, duration=dur)
         self._refresh_power()
 
@@ -336,8 +347,10 @@ class RokuController:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if resp.status == 200:
                     return ET.parse(resp).getroot()
-        except Exception:  # noqa: BLE001 — any network/parse failure → unavailable
-            pass
+        except Exception as e:  # noqa: BLE001 — any network/parse failure → unavailable
+            # Kept only so `reach` has something to say once grace runs out;
+            # a caller still just sees None and decides what that means.
+            self._last_io_error = str(e)
         return None
 
     def _post(self, path: str) -> bool:
@@ -435,8 +448,7 @@ class RokuController:
         if self.connected:
             return
         with self._lock:
-            self.connected = True
-            self.ever_connected = True
+            self.reach.succeeded()
             self.device = RokuDevice(name="Living Room TV", model="Roku Ultra", sw="12.0.0",
                                      power_mode="PowerOn")
             self.media = RokuMedia(state="pause", app="YouTube", position="1:23", duration="45:00")
@@ -519,19 +531,18 @@ class RokuSystem(System):
         self.ctl.poll(focused)
 
     def _status(self) -> str:
-        """Connection phase text. Distinguishes searching for *any* device
-        (Discovering...) from talking to a *specific* one (Connecting...), and a
-        blip on a device we already had (reconnecting...)."""
-        if self.ctl.ever_connected:
-            return "reconnecting..."
-        if self.ctl.error:
-            return self.ctl.error
-        if not self.ctl.ip:
-            return "Discovering..."  # no IP yet → SSDP search in progress
-        n = self.ctl.discovered_count
-        if n > 1:
-            return f"Connecting... (first of {n} discovered)"
-        return "Connecting..."     # have an IP → handshaking with that box
+        """Connection phase text: the shared reachability wording, plus the two
+        distinctions only this panel can draw — searching for *any* device
+        (Discovering...) versus handshaking with a specific one (Connecting...).
+        """
+        reach = self.ctl.reach
+        if not reach.ever and reach.state == CONNECTING:
+            if not self.ctl.ip:
+                return "Discovering..."  # no IP yet → SSDP search in progress
+            n = self.ctl.discovered_count
+            if n > 1:
+                return f"Connecting... (first of {n} discovered)"
+        return reach.message
 
     # -- app shortcuts -------------------------------------------------------
     def digit_apps(self) -> list[tuple[str, str, str]]:

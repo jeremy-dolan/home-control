@@ -98,6 +98,31 @@ def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
     assert ctl.connected is False
 
 
+def test_roku_stops_saying_connecting_once_grace_runs_out():
+    """Roku used to leave `error` empty on purpose so the panel sat on
+    "Connecting..." indefinitely — patience with a box waking from standby, but
+    it never ended. Grace keeps the patience and gives it a limit."""
+    sysm = roku.RokuSystem()
+    sysm.ctl.ip = "10.0.0.7"  # have an IP → past the discovery phase
+
+    assert sysm._status() == "Connecting..."
+    for _ in range(base.GRACE_ATTEMPTS - 1):
+        sysm.ctl.reach.failed("[Errno 113] No route to host")
+        assert sysm._status() == "Connecting...", "still waking, maybe"
+    sysm.ctl.reach.failed("[Errno 113] No route to host")
+    assert sysm._status() == "No route to host"
+
+    # Discovery is still this panel's own phase, ahead of any of that.
+    fresh = roku.RokuSystem()
+    fresh.ctl.ip = None
+    assert fresh._status() == "Discovering..."
+
+    # A box we've had keeps its values through a blip, and says so.
+    sysm.ctl.reach.succeeded()
+    sysm.ctl.reach.failed("[Errno 113] No route to host")
+    assert sysm._status() == "reconnecting..." and sysm.ctl.connected
+
+
 def test_hue_collapsed_line_names_the_bridge_only_on_failure():
     sysm = hue.HueSystem()
     sysm.ctl.ip = "192.168.1.99"
