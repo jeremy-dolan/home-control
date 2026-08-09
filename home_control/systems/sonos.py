@@ -263,6 +263,17 @@ class SonosController:
         # Household speakers seen in topology but absent from the pinned list.
         self._new_devices: list[str] = []
         self._fast_tick = 0
+        if not self.mock and self._pinned:
+            # Pinned speakers render as placeholder rows from the very first
+            # frame, rather than a bare "Connecting..." while the first
+            # poll's network calls are still in flight — same trick as the
+            # Midea AC panel's placeholder cards. Each shares the
+            # Reachability `_reach_for` will hand back once polling starts,
+            # so grace accumulates instead of resetting.
+            self.zones = [
+                ZoneState(name=name or ip, reach=self._reach.setdefault(ip, Reachability()))
+                for ip, name in self._pinned
+            ]
 
     # -- polling (background thread) ---------------------------------------
     def poll(self, focused: bool) -> None:

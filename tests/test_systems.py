@@ -287,10 +287,12 @@ def test_sonos_waiting_message_matches_what_it_is_doing():
     sysm = sonos.SonosSystem()
 
     sysm.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}])
+    sysm.ctl.zones = []  # ignore ambient config's own placeholder seeding
     assert sysm._waiting_message() == "Connecting..."
     assert _row_text(sysm.collapsed_lines(78)[0]) == "Connecting..."
 
     sysm.ctl._pinned = []
+    sysm.ctl.zones = []
     assert sysm._waiting_message() == "Discovering speakers..."
     assert _row_text(sysm.collapsed_lines(78)[0]) == "Discovering speakers..."
 
@@ -400,6 +402,7 @@ def test_fully_grouped():
 def test_collapsed_height_dynamic():
     s = sonos.SonosSystem()
     s.ctl._pinned = []  # ignore any ambient config so the no-pins case is deterministic
+    s.ctl.zones = []    # ...including the placeholders that config would have seeded
     # No state yet: 1 row while discovering, one row per pinned speaker otherwise.
     assert s.collapsed_height == 1
     s.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}, {"ip": "1.1.1.2"}])
