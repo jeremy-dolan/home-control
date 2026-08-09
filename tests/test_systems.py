@@ -264,7 +264,7 @@ def test_parse_speakers():
 def _zone(name, state="PLAYING", vol=30, grouped=False, title="", artist=""):
     track = sonos.TrackInfo(title=title, artist=artist) if title else None
     return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track,
-                           online=True, contacted=True)
+                           reach=sonos._live())
 
 
 def _row_text(line):
@@ -304,14 +304,59 @@ def test_sonos_unread_speaker_claims_no_state():
     # Nothing on either row is bright: none of it is a reading.
     assert all(s.dim for s in sysm._independent_row(zone, 78))
 
-    # Once we've read it and lost it, the wording changes — those dimmed values
-    # would be real last-known state, not defaults.
-    dropped = sonos.ZoneState(name="Living Room", contacted=True)
-    assert "(unreachable)" in _row_text(sysm._independent_row(dropped, 78))
+    # Once we've read it and lost it past grace, the wording changes — those
+    # dimmed values would be real last-known state, not defaults.
+    dropped = sonos.ZoneState(name="Living Room", reach=sonos._live())
+    for _ in range(base.GRACE_ATTEMPTS):
+        dropped.reach.failed("No route to host")
+    assert "(unreachable — No route to host)" in _row_text(sysm._independent_row(dropped, 78))
 
     # A live speaker is untouched.
     live = _zone("Kitchen", state="PLAYING", vol=25)
     assert "PLAYING" in _row_text(sysm._independent_row(live, 78))
+
+
+def test_sonos_speakers_get_their_own_grace():
+    """Speakers fail independently, so each carries its own reachability — and it
+    has to survive across polls, or the grace counter resets every tick and the
+    verdict never arrives."""
+    ctl = sonos.SonosController()
+
+    class FakeSpeaker:
+        ip_address = "10.0.0.3"
+        answering = True
+        volume, mute = 31, False
+
+        def get_current_transport_info(self):
+            if not self.answering:
+                raise OSError("No route to host")
+            return {"current_transport_state": "PLAYING"}
+
+        def get_current_track_info(self):
+            return {"title": "Work Song", "artist": "Nat Adderley"}
+
+        def get_queue(self):
+            return []
+
+    dev = FakeSpeaker()
+    ctl._devices = [dev]
+    ctl._poll_all()
+    assert ctl.zones[0].transport_state == "PLAYING" and ctl.zones[0].online
+
+    dev.answering = False
+    ctl._poll_all()
+    zone = ctl.zones[0]
+    assert zone.online, "one missed read keeps the speaker's last state"
+    assert zone.transport_state == "PLAYING", "and keeps the values themselves"
+
+    for _ in range(base.GRACE_ATTEMPTS):
+        ctl._poll_all()
+    zone = ctl.zones[0]
+    assert not zone.online
+    assert sonos.offline_status(zone) == "unreachable — No route to host"
+
+    # The same object accumulated the failures, rather than a fresh one per poll.
+    assert ctl._reach["10.0.0.3"] is zone.reach
 
 
 def test_midea_offline_unit_row_matches_the_card():

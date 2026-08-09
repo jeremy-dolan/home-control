@@ -24,7 +24,7 @@ import curses
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .. import config
@@ -45,7 +45,7 @@ from ..ui import (
     select_row,
     toggle_dot,
 )
-from .base import Popup, System
+from .base import Popup, Reachability, System
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
 # milliseconds, but when a speaker responds to SSDP discovery yet its control
@@ -83,11 +83,14 @@ class ZoneState:
     cross_fade: bool = False
     # Every field above defaults to something a real speaker could report, so a
     # zone we failed to read is indistinguishable from a stopped one at volume 0
-    # unless it says so. `online` is this poll's reading; `contacted` stays True
-    # once we've ever had real values, which is what separates "connecting..."
-    # from "unreachable". Both default False: assume nothing until a read lands.
-    online: bool = False
-    contacted: bool = False
+    # unless it says so. Each speaker is independently reachable, so each gets
+    # its own grace: one dropped request keeps its last reading, a silent
+    # speaker eventually says why. Default: assume nothing until a read lands.
+    reach: Reachability = field(default_factory=Reachability)
+
+    @property
+    def online(self) -> bool:
+        return self.reach.has_values
 
 
 @dataclass
@@ -151,8 +154,18 @@ UNKNOWN_BADGE = "● ????"
 
 
 def offline_status(zone: ZoneState) -> str:
-    """Why a zone has no state: still reaching for it, or had it and lost it."""
-    return "unreachable" if zone.contacted else "connecting..."
+    """Why a zone has no state — the shared reachability wording, lowercased to
+    sit in parentheses after the speaker's name."""
+    msg = zone.reach.message
+    return msg[:1].lower() + msg[1:]
+
+
+def _live() -> Reachability:
+    """A reachability that has already answered — for fixtures, which stand in
+    for speakers that replied rather than ones we're still reaching for."""
+    r = Reachability()
+    r.succeeded()
+    return r
 
 
 def _fully_grouped(zones: list[ZoneState]) -> bool:
@@ -242,9 +255,9 @@ class SonosController:
         self.queue_items: list[QueueItem] = []
         self.favorites: list[FavoriteItem] = []
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
-        # IPs we have ever read real state from, so a speaker that drops off
-        # reads "unreachable" rather than a permanent "connecting...".
-        self._ever_read: set[str] = set()
+        # One reachability per speaker, keyed by IP and kept across polls: they
+        # fail independently, and grace has to accumulate somewhere.
+        self._reach: dict[str, Reachability] = {}
         # Pinned speakers (ip, name_override) skip SSDP; empty → auto-discover.
         self._pinned = _parse_speakers(config.get("sonos", "speakers", []))
         self._name_overrides = {ip: name for ip, name in self._pinned if name}
@@ -390,7 +403,13 @@ class SonosController:
             if self.active_idx >= len(zones):
                 self.active_idx = 0
 
+    def _reach_for(self, device) -> Reachability:
+        """This speaker's reachability, kept across polls — a fresh one every
+        poll would reset the grace counter and never reach a verdict."""
+        return self._reach.setdefault(getattr(device, "ip_address", ""), Reachability())
+
     def _read_zone(self, device) -> ZoneState:
+        reach = self._reach_for(device)
         try:
             coord = self._coordinator(device)
             transport = coord.get_current_transport_info()
@@ -419,20 +438,24 @@ class SonosController:
                 shuffle, repeat, cross_fade = coord.shuffle, coord.repeat, coord.cross_fade
             except Exception:  # noqa: BLE001
                 shuffle = repeat = cross_fade = False
-            self._ever_read.add(getattr(device, "ip_address", ""))
+            reach.succeeded()
             return ZoneState(
                 name=self._display_name(device),
                 transport_state=transport.get("current_transport_state", "STOPPED"),
                 volume=device.volume, muted=device.mute,
                 grouped=grouped, queue_size=queue_size, track=track,
                 shuffle=shuffle, repeat=repeat, cross_fade=cross_fade,
-                online=True, contacted=True,
+                reach=reach,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             # No reading at all — every field would be a default, so the zone
-            # carries only its name and the fact that we couldn't reach it.
-            return ZoneState(name=self._display_name(device),
-                             contacted=getattr(device, "ip_address", "") in self._ever_read)
+            # carries only its name and why there's nothing behind it. Inside
+            # grace the previous zone's values stand, so hand those back.
+            reach.failed(str(e))
+            if reach.has_values:
+                return next((z for z in self.zones if z.reach is reach),
+                            ZoneState(name=self._display_name(device), reach=reach))
+            return ZoneState(name=self._display_name(device), reach=reach)
 
     def _poll_active_fast(self) -> None:
         """Light refresh of just the active zone's transport + track."""
@@ -852,9 +875,9 @@ class SonosController:
             self.discovered = True
             self.zones = [
                 ZoneState("Living Room", "PLAYING", 38, False, True, 12, track,
-                          online=True, contacted=True),
+                          reach=_live()),
                 ZoneState("Kitchen", "PLAYING", 25, False, True, 12, track,
-                          online=True, contacted=True),
+                          reach=_live()),
             ]
         self.queue_items = [
             QueueItem(0, "Autumn Leaves", "Cannonball Adderley"),
