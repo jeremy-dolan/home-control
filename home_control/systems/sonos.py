@@ -908,13 +908,24 @@ class SonosSystem(System):
             return 2
         return len(zones)
 
+    def _waiting_message(self) -> str:
+        """What the panel says before any speaker state has landed.
+
+        Pinned speakers never reach SSDP — `_discover` hands straight off to
+        their configured IPs — so only the unpinned case is really discovery.
+        Both views ask this, so neither can end up describing the other's case.
+        """
+        if self.ctl.error:
+            return self.ctl.error
+        return "Connecting..." if self.ctl.pinned_count() else "Discovering speakers..."
+
     def collapsed_lines(self, width: int) -> list[Line]:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
             pinned = self.ctl.pinned_count()
-            msg = self.ctl.error or ("Connecting..." if pinned else "Discovering...")
             # Pad to the pinned row count so the panel doesn't resize once speakers populate.
-            return [[Seg(msg, dim=True)]] + [[Seg("")] for _ in range(max(0, pinned - 1))]
+            return ([[Seg(self._waiting_message(), dim=True)]]
+                    + [[Seg("")] for _ in range(max(0, pinned - 1))])
         if _fully_grouped(zones):
             return self._grouped_lines(zones, active_idx, width)
         # Ungrouped: one independent row per speaker (like the Midea AC panel).
@@ -984,7 +995,7 @@ class SonosSystem(System):
     def _render_main(self, region: Region) -> None:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
-            region.text_wrapped(0, 0, self.ctl.error or "Discovering speakers...", dim=True)
+            region.text_wrapped(0, 0, self._waiting_message(), dim=True)
             return
 
         y = 0

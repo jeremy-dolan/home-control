@@ -264,6 +264,24 @@ def _row_text(line):
     return "".join(s.text for s in line)
 
 
+def test_sonos_waiting_message_matches_what_it_is_doing():
+    """Pinned speakers skip SSDP, so the panel mustn't call that discovery — and
+    the collapsed and expanded views must not disagree about which it is."""
+    sysm = sonos.SonosSystem()
+
+    sysm.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}])
+    assert sysm._waiting_message() == "Connecting..."
+    assert _row_text(sysm.collapsed_lines(78)[0]) == "Connecting..."
+
+    sysm.ctl._pinned = []
+    assert sysm._waiting_message() == "Discovering speakers..."
+    assert _row_text(sysm.collapsed_lines(78)[0]) == "Discovering speakers..."
+
+    # A real failure outranks both.
+    sysm.ctl.error = "no Sonos devices found"
+    assert sysm._waiting_message() == "no Sonos devices found"
+
+
 def test_sonos_unread_speaker_claims_no_state():
     """A speaker we couldn't read defaults to STOPPED at volume 0 — real-looking
     values we never fetched. Both rows must say so instead of rendering them."""
