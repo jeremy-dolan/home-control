@@ -6,7 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from home_control import ui
-from home_control.systems import hue, midea, roku, sonos
+from home_control.systems import base, hue, midea, roku, sonos
 
 # --- Hue ---------------------------------------------------------------------
 
@@ -88,9 +88,14 @@ def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
     assert ctl.summary == ("1 rooms/1 lights · ", "1 on")
     assert answered[1].endswith("/lights/") and answered[-1].endswith("/config")
 
+    # A bridge that goes away keeps its last reading for the grace window, then
+    # stops being something we can claim.
     reachable = False
     ctl.poll()
-    assert ctl.connected is False  # and it drops back out when the bridge goes away
+    assert ctl.connected is True, "one missed beat isn't a disconnection"
+    for _ in range(base.GRACE_ATTEMPTS):
+        ctl.poll()
+    assert ctl.connected is False
 
 
 def test_hue_collapsed_line_names_the_bridge_only_on_failure():
@@ -101,34 +106,11 @@ def test_hue_collapsed_line_names_the_bridge_only_on_failure():
         return "".join(s.text for s in sysm.collapsed_lines(78)[0])
 
     assert text() == "Connecting..."  # nothing has failed yet; the IP is just noise
-    sysm.ctl.error = (
-        "Error -1: GET Request to http://192.168.1.99/api/sEcret/lights/ failed: [Errno 113] No route to host"
-    )
+    for _ in range(base.GRACE_ATTEMPTS):
+        sysm.ctl.reach.failed(
+            "Error -1: GET Request to http://192.168.1.99/api/sEcret/lights/ failed: [Errno 113] No route to host"
+        )
     assert text() == "192.168.1.99: No route to host"
-
-
-def test_hue_scrub_error_hides_api_username():
-    raw = "Error -1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ timed out."
-    out = hue.scrub_error(raw, "192.168.1.99")
-    assert out == "timed out."
-    assert "sUp3rSecret" not in out
-    # The failure worth reading survives; the errno and the framing don't.
-    assert hue.scrub_error(
-        "Error -1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ failed: "
-        "[Errno 113] No route to host",
-        "192.168.1.99",
-    ) == "No route to host"
-    # The registration POST's URL ends at a bare /api — also collapsed.
-    assert hue.scrub_error("POST Request to http://192.0.2.1/api timed out.", "192.0.2.1") == "timed out."
-    # A bridge that answers with a real complaint keeps it.
-    assert hue.scrub_error(
-        "Error 1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ failed: unauthorized user",
-        "192.168.1.99",
-    ) == "unauthorized user"
-    # Messages without a URL pass through untouched.
-    assert hue.scrub_error("Press the bridge link button, then wait...", "192.168.1.99") == (
-        "Press the bridge link button, then wait..."
-    )
 
 
 def test_hue_clock_sync_pushes_host_time(monkeypatch):
