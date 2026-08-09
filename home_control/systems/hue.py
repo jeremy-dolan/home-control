@@ -973,7 +973,7 @@ class HueSystem(System):
         rooms, lights = self.ctl.snapshot()
         if not self.ctl.connected:
             if self.ctl.error:
-                region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "fault", bold=True)
+                region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "fault")
                 region.text_wrapped(1, 0, scrub_error(self.ctl.error, self.ctl.ip), dim=True)
             else:
                 region.text(0, 0, f"Connecting to {self.ctl.ip}...", dim=True)
