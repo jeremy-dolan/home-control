@@ -18,6 +18,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from ..ui import Line, Region
@@ -76,23 +77,23 @@ def in_parens(msg: str) -> str:
     return msg[:1].lower() + msg[1:]
 
 
-# The four things a panel can be saying while it has no live state, plus LIVE.
-LIVE = "live"                  # last attempt landed
-CONNECTING = "connecting"      # never reached it, still within grace
-FAILED = "failed"              # never reached it, and now we know why
-RECONNECTING = "reconnecting"  # had it, missing a beat — last values still stand
-UNREACHABLE = "unreachable"    # had it, lost it past grace
+class ReachState(Enum):
+    """The four things a panel can be saying while it has no live state, plus
+    LIVE. Only `Reachability.message` turns one of these into user-facing
+    text; the states themselves are compared, never displayed."""
+    LIVE = "live"                  # last attempt landed
+    CONNECTING = "connecting"      # never reached it, still within grace
+    FAILED = "failed"              # never reached it, and now we know why
+    RECONNECTING = "reconnecting"  # had it, missing a beat — last values still stand
+    UNREACHABLE = "unreachable"    # had it, lost it past grace
 
 
 @dataclass
 class Reachability:
     """Whether a device is answering, and what to say while it isn't.
 
-    Every panel used to answer this its own way and no two agreed: Hue reported
-    the first failed read instantly, Roku deliberately stayed silent, Sonos
-    swallowed the exception, Midea spoke up only when it had no units at all.
-    The variable was never *retrying* — all of them retry forever — but how much
-    silence to tolerate first. That is this one number, `grace`.
+    Every panel retries forever; the only question is how much silence to
+    tolerate before saying why. That tolerance is this one number, `grace`.
 
     Hold one per thing that can independently be reachable: a bridge, a TV, each
     speaker, each AC unit. Poll code calls `succeeded()` / `failed(reason)`;
@@ -115,31 +116,31 @@ class Reachability:
             self.reason = scrub_error(reason)
 
     @property
-    def state(self) -> str:
+    def state(self) -> ReachState:
         if self.fails == 0:
-            return LIVE if self.ever else CONNECTING
+            return ReachState.LIVE if self.ever else ReachState.CONNECTING
         if not self.ever:
-            return CONNECTING if self.fails < self.grace else FAILED
-        return RECONNECTING if self.fails < self.grace else UNREACHABLE
+            return ReachState.CONNECTING if self.fails < self.grace else ReachState.FAILED
+        return ReachState.RECONNECTING if self.fails < self.grace else ReachState.UNREACHABLE
 
     @property
     def has_values(self) -> bool:
         """True when cached device state is worth drawing. A missed beat inside
         grace keeps the last reading on screen; past grace it is no longer
         something we can claim, and never-reached means there is nothing to draw."""
-        return self.state in (LIVE, RECONNECTING)
+        return self.state in (ReachState.LIVE, ReachState.RECONNECTING)
 
     @property
     def message(self) -> str:
         """One line for the panel: '' while live, else why there's nothing."""
         state = self.state
-        if state == LIVE:
+        if state == ReachState.LIVE:
             return ""
-        if state == CONNECTING:
+        if state == ReachState.CONNECTING:
             return "Connecting..."
-        if state == RECONNECTING:
-            return "reconnecting..."
-        if state == FAILED:
+        if state == ReachState.RECONNECTING:
+            return "Reconnecting..."
+        if state == ReachState.FAILED:
             return self.reason or "unreachable"
         return f"unreachable — {self.reason}" if self.reason else "unreachable"
 

@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 
 from .. import config
 from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, hint, hint_row, select_row
-from .base import CONNECTING, FAILED, GRACE_ATTEMPTS, UNREACHABLE, Reachability, System, VoiceAction
+from .base import GRACE_ATTEMPTS, Reachability, ReachState, System, VoiceAction
 
 ECP_PORT = 8060
 # Steady-state timeout for refresh polls and keypress/launch commands. Keep it
@@ -177,7 +177,7 @@ class RokuController:
     @property
     def ever_connected(self) -> bool:
         """True once we've seen this box at least once, which is what separates
-        "reconnecting..." from a box we've never reached."""
+        "Reconnecting..." from a box we've never reached."""
         return self.reach.ever
 
     # -- polling (background thread) ---------------------------------------
@@ -536,7 +536,7 @@ class RokuSystem(System):
         (Discovering...) versus handshaking with a specific one (Connecting...).
         """
         reach = self.ctl.reach
-        if not reach.ever and reach.state == CONNECTING:
+        if not reach.ever and reach.state == ReachState.CONNECTING:
             if not self.ctl.ip:
                 return "Discovering..."  # no IP yet → SSDP search in progress
             n = self.ctl.discovered_count
@@ -551,7 +551,7 @@ class RokuSystem(System):
         msg = reach.message
         # Past grace: name the box the way Hue names the bridge. Not while
         # merely reconnecting — that keeps the bare shared wording.
-        if reach.state in (FAILED, UNREACHABLE) and self.ctl.ip:
+        if reach.state in (ReachState.FAILED, ReachState.UNREACHABLE) and self.ctl.ip:
             return f"{self.ctl.ip}: {msg}"
         return msg
 
@@ -592,7 +592,7 @@ class RokuSystem(System):
         # marker) rather than dropping every hotkey and control hint.
         if not self.ctl.connected and not self.ctl.ever_connected:
             reach = self.ctl.reach
-            if reach.state == CONNECTING and self.ctl.ip:
+            if reach.state == ReachState.CONNECTING and self.ctl.ip:
                 # One line carries it all here -- "Connecting..." plus a
                 # separate IP line said the same thing twice.
                 source = "auto-discovered" if self.ctl.auto else "configured"

@@ -38,7 +38,7 @@ from ..ui import (
     pad_between,
     rgb_color,
 )
-from .base import CONNECTING, Reachability, System, VoiceAction
+from .base import Reachability, ReachState, System, VoiceAction
 
 BRIDGE_IP = "192.168.1.99"
 CONNECT_TIMEOUT = 4  # seconds; phue's default 10 hangs the UI when unreachable
@@ -939,7 +939,7 @@ class HueSystem(System):
             # The IP earns its place only alongside a failure, naming what failed;
             # before that it's noise, and Roku/Sonos say a bare "Connecting..." too.
             msg = reach.message
-            prefix = f"{self.ctl.ip}: " if reach.state != CONNECTING else ""
+            prefix = f"{self.ctl.ip}: " if reach.state != ReachState.CONNECTING else ""
             return [[Seg(prefix + msg, dim=True)]]
         # Badge mirrors the Router's "● ONLINE": accent colour, bold, on the left.
         badge = "● CONNECTED"
@@ -967,7 +967,7 @@ class HueSystem(System):
         rooms, lights = self.ctl.snapshot()
         reach = self.ctl.reach
         if not reach.has_values:
-            if reach.state == CONNECTING:
+            if reach.state == ReachState.CONNECTING:
                 # One line carries it all here -- "Connecting..." plus a
                 # separate IP line said the same thing twice.
                 source = "configured" if self.ctl.ip_configured else "default"

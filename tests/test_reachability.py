@@ -1,22 +1,16 @@
 """The shared reachability state machine every panel reports through.
 
-Before this existed each panel decided for itself how long to stay quiet about
-a device that wasn't answering, and no two agreed — Hue reported the first
-failed read instantly, Roku deliberately said nothing, Sonos swallowed the
-exception, Midea only spoke up when it had no units at all. These tests pin the
-one rule they now share.
+Every panel retries forever; these tests pin the one rule that governs how
+long each stays quiet about a device that isn't answering before saying why.
 """
 
-from home_control.systems.base import (
-    CONNECTING,
-    FAILED,
-    GRACE_ATTEMPTS,
-    LIVE,
-    RECONNECTING,
-    UNREACHABLE,
-    Reachability,
-    scrub_error,
-)
+from home_control.systems.base import GRACE_ATTEMPTS, Reachability, ReachState, scrub_error
+
+CONNECTING = ReachState.CONNECTING
+FAILED = ReachState.FAILED
+LIVE = ReachState.LIVE
+RECONNECTING = ReachState.RECONNECTING
+UNREACHABLE = ReachState.UNREACHABLE
 
 
 def test_never_reached_stays_quiet_then_says_why():
@@ -42,7 +36,7 @@ def test_a_missed_beat_keeps_the_last_reading():
 
     r.failed("timed out")
     assert r.state == RECONNECTING
-    assert r.message == "reconnecting..."
+    assert r.message == "Reconnecting..."
     assert r.has_values, "last reading still stands inside grace"
 
     for _ in range(GRACE_ATTEMPTS):

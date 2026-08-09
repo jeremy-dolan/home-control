@@ -120,7 +120,7 @@ def test_roku_stops_saying_connecting_once_grace_runs_out():
     # A box we've had keeps its values through a blip, and says so.
     sysm.ctl.reach.succeeded()
     sysm.ctl.reach.failed("[Errno 113] No route to host")
-    assert sysm._status() == "reconnecting..." and sysm.ctl.connected
+    assert sysm._status() == "Reconnecting..." and sysm.ctl.connected
 
 
 def test_roku_names_the_search_not_a_host_when_discovery_finds_nothing():
