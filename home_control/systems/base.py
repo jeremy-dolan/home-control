@@ -18,7 +18,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, auto
 from typing import Any
 
 from ..ui import Line, Region
@@ -78,14 +78,12 @@ def in_parens(msg: str) -> str:
 
 
 class ReachState(Enum):
-    """The four things a panel can be saying while it has no live state, plus
-    LIVE. Only `Reachability.message` turns one of these into user-facing
-    text; the states themselves are compared, never displayed."""
-    LIVE = "live"                  # last attempt landed
-    CONNECTING = "connecting"      # never reached it, still within grace
-    FAILED = "failed"              # never reached it, and now we know why
-    RECONNECTING = "reconnecting"  # had it, missing a beat — last values still stand
-    UNREACHABLE = "unreachable"    # had it, lost it past grace
+    """Compared only -- `Reachability.message` is the user-facing text."""
+    LIVE = auto()          # last attempt landed
+    CONNECTING = auto()    # never reached it, still within grace
+    FAILED = auto()        # never reached it, and now we know why
+    RECONNECTING = auto()  # had it, missing a beat — last values still stand
+    UNREACHABLE = auto()   # had it, lost it past grace
 
 
 @dataclass
