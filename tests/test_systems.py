@@ -110,7 +110,7 @@ def test_roku_stops_saying_connecting_once_grace_runs_out():
         sysm.ctl.reach.failed("[Errno 113] No route to host")
         assert sysm._status() == "Connecting...", "still waking, maybe"
     sysm.ctl.reach.failed("[Errno 113] No route to host")
-    assert sysm._status() == "No route to host"
+    assert sysm._status() == "10.0.0.7: No route to host"
 
     # Discovery is still this panel's own phase, ahead of any of that.
     fresh = roku.RokuSystem()

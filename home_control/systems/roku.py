@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 
 from .. import config
 from ..ui import BADGE_ACTIVE, BADGE_IDLE, Line, Region, Seg, badge_color, hint, hint_row, select_row
-from .base import CONNECTING, GRACE_ATTEMPTS, Reachability, System, VoiceAction
+from .base import CONNECTING, FAILED, GRACE_ATTEMPTS, UNREACHABLE, Reachability, System, VoiceAction
 
 ECP_PORT = 8060
 # Steady-state timeout for refresh polls and keypress/launch commands. Keep it
@@ -542,7 +542,13 @@ class RokuSystem(System):
             n = self.ctl.discovered_count
             if n > 1:
                 return f"Connecting... (first of {n} discovered)"
-        return reach.message
+            return reach.message
+        msg = reach.message
+        # Past grace: name the box the way Hue names the bridge. Not while
+        # merely reconnecting — that keeps the bare shared wording.
+        if reach.state in (FAILED, UNREACHABLE) and self.ctl.ip:
+            return f"{self.ctl.ip}: {msg}"
+        return msg
 
     # -- app shortcuts -------------------------------------------------------
     def digit_apps(self) -> list[tuple[str, str, str]]:
@@ -580,7 +586,15 @@ class RokuSystem(System):
         # we've seen the device, a blip keeps the full remote on screen (with a
         # marker) rather than dropping every hotkey and control hint.
         if not self.ctl.connected and not self.ctl.ever_connected:
+            # Line 1 always matches what collapsed shows; expanding only adds a
+            # second line, never changes the first.
             region.text(0, 0, self._status(), dim=True)
+            reach = self.ctl.reach
+            if reach.state == CONNECTING:
+                if self.ctl.ip:
+                    region.text(1, 0, self.ctl.ip, dim=True)
+            else:
+                region.text(1, 0, "Roku unreachable", "fault")
             return
         self._render_header(region)
         if self.mode == "keyboard":
