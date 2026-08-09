@@ -654,13 +654,11 @@ class MideaController:
             pass
 
     def _discover_all(self) -> None:
-        """Run a discovery pass. The local UDP broadcast/probe is cheap and
-        retries every poll tick, same as Roku's SSDP sweep — a pinned, already
-        -paired unit never touches the cloud, so gating that on
-        DISCOVERY_RETRY_INTERVAL only delayed noticing it came back. Only the
-        cloud pairing call below (a new V3 unit with no cached token) stays
-        rate-limited: a failure there is often a cloud-side auth rate limit,
-        unlike a plain unanswered probe."""
+        """Run a discovery pass. The local UDP broadcast/probe retries every
+        poll tick, same as Roku's SSDP sweep. Only the cloud pairing call
+        below (a new V3 unit with no cached token) is rate-limited by
+        DISCOVERY_RETRY_INTERVAL — a failure there is often a cloud-side auth
+        rate limit, unlike a plain unanswered probe."""
         raw = self._discover_raw()
         self._last_seen_count = len(raw)
         self._last_connect_error = ""
@@ -780,10 +778,8 @@ class MideaController:
             # Nothing new to connect, but units are already up — the ordinary
             # steady state, not a failure. Their liveness is _refresh_snapshot's.
             return
-        # Reached nothing at all. The error used to be gated on having no units
-        # either, so a pinned unit's placeholder card suppressed it entirely and
-        # the panel said "connecting..." forever without ever saying why. Record
-        # it against each unreached unit, so the reason lands on the row.
+        # Reached nothing at all. Record why against each unreached unit, so
+        # the reason lands on the row.
         if self._last_seen_count == 0:
             # A pinned unit was probed directly, not scanned for -- "no units
             # responded on the LAN" reads as though a broadcast sweep came up
