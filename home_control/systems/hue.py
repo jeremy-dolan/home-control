@@ -943,8 +943,10 @@ class HueSystem(System):
     # -- collapsed ---------------------------------------------------------
     def collapsed_lines(self, width: int) -> list[Line]:
         if not self.ctl.connected:
-            msg = scrub_error(self.ctl.error, self.ctl.ip) or "connecting..."
-            return [[Seg(f"{self.ctl.ip}: {msg}", dim=True)]]
+            # The IP earns its place only alongside a failure, naming what failed;
+            # before that it's noise, and Roku/Sonos say a bare "Connecting..." too.
+            err = scrub_error(self.ctl.error, self.ctl.ip)
+            return [[Seg(f"{self.ctl.ip}: {err}" if err else "Connecting...", dim=True)]]
         # Badge mirrors the Router's "● ONLINE": accent colour, bold, on the left.
         badge = "● CONNECTED"
         inventory, on_count = self.ctl.summary

@@ -93,6 +93,20 @@ def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
     assert ctl.connected is False  # and it drops back out when the bridge goes away
 
 
+def test_hue_collapsed_line_names_the_bridge_only_on_failure():
+    sysm = hue.HueSystem()
+    sysm.ctl.ip = "192.168.1.99"
+
+    def text():
+        return "".join(s.text for s in sysm.collapsed_lines(78)[0])
+
+    assert text() == "Connecting..."  # nothing has failed yet; the IP is just noise
+    sysm.ctl.error = (
+        "Error -1: GET Request to http://192.168.1.99/api/sEcret/lights/ failed: [Errno 113] No route to host"
+    )
+    assert text() == "192.168.1.99: No route to host"
+
+
 def test_hue_scrub_error_hides_api_username():
     raw = "Error -1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ timed out."
     out = hue.scrub_error(raw, "192.168.1.99")
