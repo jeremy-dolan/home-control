@@ -1061,11 +1061,11 @@ class MideaSystem(System):
         return [self._unit_row(u, width) for u in units]
 
     def _unit_row(self, u: MideaUnit, width: int) -> Line:
+        if not u.online:
+            return self._offline_row(u)
         label, state = unit_badge(u)
         color = badge_color(state, self.color)
         left = [Seg(label, color, bold=(state == BADGE_ACTIVE)), Seg(f"  {u.name}")]
-        if not u.online:
-            return left
         ext = ""
         if u.outdoor_temp_c is not None:
             ext = f"  (exterior: {_fmt_temp(u.outdoor_temp_c, u.fahrenheit)})"
@@ -1139,16 +1139,25 @@ class MideaSystem(System):
     def _dim(line: Line) -> Line:
         return [Seg(s.text, "", dim=True) for s in line]
 
+    def _offline_row(self, u: MideaUnit) -> Line:
+        """Badge, name, and why there's nothing else — dimmed whole, since none
+        of it is live state. The collapsed list and the expanded card both build
+        on this, so a unit we can't see says the same thing either way.
+
+        "connecting…" while we've never reached it; "unreachable" only once we
+        had it and lost contact (so a card's dimmed values are real last-known
+        state, not defaults).
+        """
+        label, _ = unit_badge(u)
+        status = "unreachable" if u.contacted else "connecting..."
+        return self._dim([Seg(label), Seg(f"  {u.name} ({status})")])
+
     def _header_row(self, u: MideaUnit, is_selected: bool, width: int) -> Line:
-        label, state = unit_badge(u)
-        color = badge_color(state, self.color)
         cur = cursor(self.color, is_selected)
         if not u.online:
-            # "connecting…" while we've never reached it; "unreachable" only
-            # once we had it and lost contact (so the card's dimmed values are
-            # real last-known state, not defaults).
-            status = "unreachable" if u.contacted else "connecting..."
-            return [cur, Seg(label, color), Seg(f"  {u.name} ({status})")]
+            return [cur, *self._offline_row(u)]
+        label, state = unit_badge(u)
+        color = badge_color(state, self.color)
         left: Line = [cur, Seg(label, color, bold=(state == BADGE_ACTIVE)), Seg(f"  {u.name}")]
         right: Line = []
         if u.filter_alert:

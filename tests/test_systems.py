@@ -6,7 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from home_control import ui
-from home_control.systems import hue, roku, sonos
+from home_control.systems import hue, midea, roku, sonos
 
 # --- Hue ---------------------------------------------------------------------
 
@@ -257,6 +257,24 @@ def test_parse_speakers():
 def _zone(name, state="PLAYING", vol=30, grouped=False, title="", artist=""):
     track = sonos.TrackInfo(title=title, artist=artist) if title else None
     return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track)
+
+
+def _row_text(line):
+    return "".join(s.text for s in line)
+
+
+def test_midea_offline_unit_row_matches_the_card():
+    """The collapsed row and the expanded card header say the same thing about a
+    unit we can't see — the card's version was the honest one."""
+    sysm = midea.MideaSystem()
+    u = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room", online=False)
+    collapsed = _row_text(sysm._unit_row(u, 78))
+    assert collapsed == "● ????  Living Room (connecting...)"
+    assert _row_text(sysm._header_row(u, False, 78)) == "  " + collapsed  # + cursor gutter
+    assert all(s.dim for s in sysm._unit_row(u, 78))
+    # Contacted once, then lost: dimmed values are stale, not absent.
+    seen = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room", online=False, contacted=True)
+    assert "(unreachable)" in _row_text(sysm._unit_row(seen, 78))
 
 
 def test_fully_grouped():
