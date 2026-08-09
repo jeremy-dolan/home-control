@@ -363,13 +363,20 @@ def test_midea_offline_unit_row_matches_the_card():
     """The collapsed row and the expanded card header say the same thing about a
     unit we can't see — the card's version was the honest one."""
     sysm = midea.MideaSystem()
-    u = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room", online=False)
+    u = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room")  # never reached
     collapsed = _row_text(sysm._unit_row(u, 78))
     assert collapsed == "● ????  Living Room (connecting...)"
     assert _row_text(sysm._header_row(u, False, 78)) == "  " + collapsed  # + cursor gutter
     assert all(s.dim for s in sysm._unit_row(u, 78))
+
+    # Grace spent without ever reaching it: the row stops saying "connecting"
+    # and names the reason instead.
+    for _ in range(base.GRACE_ATTEMPTS):
+        u.reach.failed("No Midea units responded on the LAN")
+    assert "(no Midea units responded on the LAN)" in _row_text(sysm._unit_row(u, 78))
+
     # Contacted once, then lost: dimmed values are stale, not absent.
-    seen = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room", online=False, contacted=True)
+    seen = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room", reach=midea._lost())
     assert "(unreachable)" in _row_text(sysm._unit_row(seen, 78))
 
 

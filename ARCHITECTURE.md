@@ -36,6 +36,13 @@ halves sharing state:
 - **Panel** — `collapsed_lines()` / `render_expanded()` draw cached state;
   `handle_key()` runs only while focused, on the main thread.
 
+Whether a device is answering is not each panel's own invention: controllers
+hold a `base.Reachability` per independently-reachable thing (a bridge, a TV,
+each speaker, each AC unit), call `succeeded()` / `failed(reason)` from poll
+code, and render from `state` / `message` / `has_values`. It carries the grace
+period before a silent device is called unreachable, and the vocabulary all
+four panels report through. See its docstring for the state machine.
+
 The `Shell` (`home_control/app.py`) reaches devices only through the `System`
 contract (focus, toolbar, help wiring); shared layout lives in `layout.py`,
 box-drawing and color in `ui.py`. TAB/Shift-TAB changes focus at the shell

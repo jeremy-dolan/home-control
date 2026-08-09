@@ -45,7 +45,7 @@ from ..ui import (
     select_row,
     toggle_dot,
 )
-from .base import Popup, Reachability, System
+from .base import Popup, Reachability, System, in_parens
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
 # milliseconds, but when a speaker responds to SSDP discovery yet its control
@@ -154,10 +154,9 @@ UNKNOWN_BADGE = "● ????"
 
 
 def offline_status(zone: ZoneState) -> str:
-    """Why a zone has no state — the shared reachability wording, lowercased to
-    sit in parentheses after the speaker's name."""
-    msg = zone.reach.message
-    return msg[:1].lower() + msg[1:]
+    """Why a zone has no state — the shared reachability wording, set to sit in
+    parentheses after the speaker's name."""
+    return in_parens(zone.reach.message)
 
 
 def _live() -> Reachability:

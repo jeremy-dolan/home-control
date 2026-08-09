@@ -95,10 +95,28 @@ def test_scrub_error_keeps_the_reason_and_drops_the_rest():
     assert scrub_error("Error 1: GET Request to http://10.0.0.4/api/k/ failed: unauthorized user") == (
         "unauthorized user"
     )
+    # urllib's wrapper, as Roku's ECP calls raise it.
+    assert scrub_error("<urlopen error [Errno 113] No route to host>") == "No route to host"
+    # ...and urllib3's, several layers deep, as a Sonos SOAP call raises it.
+    assert scrub_error(
+        "HTTPConnectionPool(host='192.168.1.60', port=1400): Max retries exceeded with url: "
+        "/MediaRenderer/AVTransport/Control (Caused by NewConnectionError("
+        "'<urllib3.connection.HTTPConnection object at 0x7f>: Failed to establish a new "
+        "connection: [Errno 113] No route to host'))"
+    ) == "No route to host"
     # Nothing to strip: left alone.
     assert scrub_error("Press the bridge link button, then wait...") == (
         "Press the bridge link button, then wait..."
     )
+
+
+def test_in_parens_leaves_an_acronym_alone():
+    from home_control.systems.base import in_parens
+
+    assert in_parens("Connecting...") == "connecting..."
+    assert in_parens("No route to host") == "no route to host"
+    assert in_parens("HTTPConnectionPool(...)") == "HTTPConnectionPool(...)"
+    assert in_parens("") == ""
 
 
 def test_reason_survives_a_later_reasonless_failure():

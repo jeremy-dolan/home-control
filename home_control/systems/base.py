@@ -42,6 +42,12 @@ _URL_RE = re.compile(r"https?://([^\s/]+)\S*")
 # device itself, plus an error code that says less than the sentence after it.
 _REQUEST_RE = re.compile(r"^(?:GET|PUT|POST|DELETE) Request to \S+ (?:failed: )?")
 _CODE_RE = re.compile(r"^(?:Error -?\d+:|\[Errno \d+\])\s*")
+# urllib hands back the real errno inside "<urlopen error ...>". Keep the inside.
+_WRAPPED_RE = re.compile(r"<urlopen error ([^>]*)>")
+# When a stack of libraries has wrapped the failure — urllib3's
+# HTTPConnectionPool(...) round a NewConnectionError round the real cause — the
+# errno clause is the one sentence a person wants, wherever it ended up.
+_ERRNO_TAIL_RE = re.compile(r"\[Errno \d+\] ([^'\")>]+)")
 
 
 def scrub_error(msg: str) -> str:
@@ -50,10 +56,24 @@ def scrub_error(msg: str) -> str:
     ``Error -1: GET Request to http://10.0.0.2/api/<secret>/lights/ failed:
     [Errno 113] No route to host`` → ``No route to host``
     """
-    msg = _URL_RE.sub(r"\1", str(msg)).strip()
+    msg = str(msg).strip()
+    errno = _ERRNO_TAIL_RE.search(msg)
+    if errno:
+        return errno.group(1).strip()
+    msg = _WRAPPED_RE.sub(r"\1", msg).strip()
+    msg = _URL_RE.sub(r"\1", msg).strip()
     msg = _CODE_RE.sub("", msg).strip()
     msg = _REQUEST_RE.sub("", msg).strip()
     return _CODE_RE.sub("", msg).strip()
+
+
+def in_parens(msg: str) -> str:
+    """A reachability message reflowed to sit in parentheses after a device's
+    name. Lowercases an ordinary opening word, but leaves an acronym alone —
+    "HTTPConnectionPool" must not become "hTTPConnectionPool"."""
+    if len(msg) > 1 and msg[1].isupper():
+        return msg
+    return msg[:1].lower() + msg[1:]
 
 
 # The four things a panel can be saying while it has no live state, plus LIVE.

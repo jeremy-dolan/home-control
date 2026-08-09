@@ -29,8 +29,21 @@ def _unit(**kw: object) -> midea.MideaUnit:
     # caps_known=True by default; pass contacted=False to model a
     # never-reached placeholder, or caps_known=False for one whose
     # capabilities reply hasn't landed yet.
-    base: dict[str, object] = dict(id=1, ip="192.168.1.50", name="LR", online=True,
-                                   contacted=True, caps_known=True)
+    #
+    # online/contacted are views on the unit's Reachability rather than fields,
+    # so build the reachability that produces the pair asked for and leave the
+    # call sites reading the way they always did.
+    online = bool(kw.pop("online", True))
+    contacted = bool(kw.pop("contacted", True))
+    reach = midea.Reachability()
+    if contacted:
+        reach.succeeded()
+        if not online:  # had it, then lost it past grace
+            for _ in range(reach.grace):
+                reach.failed("stopped responding")
+    # Never contacted → a fresh reachability: still "connecting...", nothing read.
+    base: dict[str, object] = dict(id=1, ip="192.168.1.50", name="LR",
+                                   reach=reach, caps_known=True)
     base.update(kw)
     return midea.MideaUnit(**base)  # type: ignore[arg-type]
 
@@ -310,7 +323,7 @@ def test_placeholder_unit_has_no_phantom_on_toggles():
     # to off — otherwise its brief placeholder card renders e.g. "Displ ●"
     # before the real (usually off) value arrives. Regression: display_on
     # used to default True.
-    u = midea.MideaUnit(id=-1000, ip="10.0.0.9", name="Den", online=False)
+    u = midea.MideaUnit(id=-1000, ip="10.0.0.9", name="Den")  # never reached
     assert not u.display_on and not u.power and not u.eco and not u.turbo
 
 
@@ -494,7 +507,7 @@ def test_unit_from_device_maps_mode_fan_swing():
             "fan_custom": True, "eco": True, "turbo_cool": True, "display_control": True,
         },
     )
-    u = midea._unit_from_device(dev, "192.168.1.50")
+    u = midea._unit_from_device(dev, "192.168.1.50", midea._live())
     assert u.mode == "COOL"
     assert u.fan_speed == "MEDIUM"
     assert u.swing_mode == "VERTICAL"
@@ -512,7 +525,9 @@ def test_unit_from_device_offline_and_off():
         capabilities={},
         available=False,
     )
-    u = midea._unit_from_device(dev, "192.168.1.52")
+    # available=False on a unit we had: the caller hands in the reachability
+    # that says so, past grace.
+    u = midea._unit_from_device(dev, "192.168.1.52", midea._lost())
     assert u.online is False
     assert u.power is False
     assert u.swing_mode == "OFF"
@@ -540,8 +555,8 @@ def test_every_fahrenheit_setpoint_survives_the_wire(monkeypatch):
     # 22.0°C — the setpoint never moved and the right arrow looked dead. Each
     # whole °F must land on its own half-degree and read back as itself.
     ctl = _pinned_controller(monkeypatch, [])
-    ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
-                                    contacted=True, caps_known=True, fahrenheit=True)
+    ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", reach=midea._live(),
+                                    caps_known=True, fahrenheit=True)
     for f in range(61, 87):
         sent = ctl.target_c_for(1, f)
         stored = _wire_roundtrip(sent)
@@ -551,8 +566,8 @@ def test_every_fahrenheit_setpoint_survives_the_wire(monkeypatch):
 
 def test_celsius_setpoint_is_quantized_too(monkeypatch):
     ctl = _pinned_controller(monkeypatch, [])
-    ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", online=True,
-                                    contacted=True, caps_known=True, fahrenheit=False)
+    ctl._units[1] = midea.MideaUnit(id=1, ip="10.0.0.9", name="LR", reach=midea._live(),
+                                    caps_known=True, fahrenheit=False)
     assert ctl.target_c_for(1, 23) == 23.0
 
 

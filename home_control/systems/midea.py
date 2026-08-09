@@ -56,7 +56,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -84,7 +84,7 @@ from ..ui import (
     toggle_dot,
     wrap,
 )
-from .base import Popup, System, VoiceAction
+from .base import Popup, Reachability, System, VoiceAction, in_parens
 
 # Minimum gap between discovery attempts. A failure here can be a cloud-side
 # auth rate limit — retrying every poll tick (as fast as 1s when focused)
@@ -176,13 +176,12 @@ class MideaUnit:
     id: int
     ip: str
     name: str
-    online: bool
-    # True once we've actually read this unit's state at least once. A pinned
-    # unit we've never reached (placeholder/failed pairing) leaves this False,
-    # so the panel can show a bare "connecting…" card instead of fabricated
-    # default field values. Once contacted it stays True even if the unit
-    # later goes offline — then its dimmed card is genuine last-known state.
-    contacted: bool = False
+    # Units drop off the LAN one at a time, so each carries its own. `online`
+    # is whether its card is worth drawing, `contacted` whether we have ever
+    # read real state from it — a pinned unit we've never reached shows a bare
+    # "connecting…" card rather than fabricated defaults, while one we had and
+    # lost keeps a dimmed card of genuine last-known state.
+    reach: Reachability = field(default_factory=Reachability)
     # Capabilities are a second, separate reply from the status one, and it
     # can land a beat later. Until it does, the supported_* lists below are
     # placeholder defaults, not this unit's real options — the panel shows
@@ -225,6 +224,16 @@ class MideaUnit:
     supports_turbo: bool = True
     supports_display_control: bool = True
 
+    @property
+    def online(self) -> bool:
+        """Whether this unit's card is worth drawing."""
+        return self.reach.has_values
+
+    @property
+    def contacted(self) -> bool:
+        """Whether we have ever read real state from it."""
+        return self.reach.ever
+
 
 @dataclass
 class EditableField:
@@ -235,6 +244,23 @@ class EditableField:
     api_key: str
     value: Any
     field_type: str = "info"  # "bool" | "int" | "enum"
+
+
+def _live() -> Reachability:
+    """A reachability that has already answered — for fixtures standing in for
+    units that replied."""
+    r = Reachability()
+    r.succeeded()
+    return r
+
+
+def _lost() -> Reachability:
+    """Answered once, then went quiet past grace — the fixture for a unit whose
+    dimmed card is genuine last-known state."""
+    r = _live()
+    for _ in range(r.grace):
+        r.failed()
+    return r
 
 
 def unit_badge(u: MideaUnit) -> tuple[str, str]:
@@ -405,7 +431,7 @@ def _ignore_push_padding(dev: MideaACDevice) -> None:
     dev.process_message = process  # type: ignore[method-assign]
 
 
-def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
+def _unit_from_device(dev: MideaACDevice, ip: str, reach: Reachability) -> MideaUnit:
     a = dev.attributes
     caps = dev.capabilities or {}
     if not _caps_ready(dev):
@@ -415,7 +441,7 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
         vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
         return MideaUnit(
             id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
-            online=dev.available, contacted=True, caps_known=False,
+            reach=reach, caps_known=False,
             power=bool(a.get("power")),
             mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
             fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
@@ -462,7 +488,7 @@ def _unit_from_device(dev: MideaACDevice, ip: str) -> MideaUnit:
     vertical, horizontal = bool(a.get("swing_vertical")), bool(a.get("swing_horizontal"))
     return MideaUnit(
         id=dev.device_id, ip=ip, name=dev.name or f"AC {dev.device_id}",
-        online=dev.available, contacted=True, caps_known=True,
+        reach=reach, caps_known=True,
         power=bool(a.get("power")),
         mode=_INT_TO_MODE.get(int(a.get("mode") or 0), "COOL"),
         fan_speed=_INT_TO_FAN.get(int(a.get("fan_speed") or 0), "AUTO"),
@@ -496,6 +522,10 @@ class MideaController:
         self._cloud_kind = (config.get("midea", "cloud", "nethome_plus") or "nethome_plus").lower()
         self._lock = threading.Lock()
         self._units: dict[int, MideaUnit] = {}
+        # One reachability per unit, kept across passes so grace accumulates.
+        # Units are frozen and reference these objects, so updating one here
+        # updates what the panel reads.
+        self._reach: dict[int, Reachability] = {}
         self._devices: dict[int, MideaACDevice] = {}
         self._ips: dict[int, str] = {}
         self._filled: dict[int, float] = {}   # device id -> when its follow-up burst was sent
@@ -515,7 +545,8 @@ class MideaController:
             # pass runs; same synthetic-id scheme as _discover_all's loop.
             for i, p in enumerate(self._pinned):
                 pid = -(1000 + i)
-                self._units[pid] = MideaUnit(id=pid, ip=p["ip"], name=p.get("name") or p["ip"], online=False)
+                self._units[pid] = MideaUnit(id=pid, ip=p["ip"], name=p.get("name") or p["ip"],
+                                            reach=self._reach_for(pid))
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -686,7 +717,7 @@ class MideaController:
                 self._units.setdefault(
                     did,
                     MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or d["ip_address"],
-                              online=False),
+                              reach=self._reach_for(did)),
                 )
                 meta = {"ip": d["ip_address"], "port": d["port"], "type": d["type"],
                         "protocol": d["protocol"], "model": d.get("model", "")}
@@ -698,7 +729,8 @@ class MideaController:
                 # Responded to the UDP broadcast (so we have a real device_id)
                 # but pairing failed — still show a dimmed placeholder card
                 # rather than vanishing entirely.
-                self._units[did] = MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or "", online=False)
+                self._units[did] = MideaUnit(id=did, ip=d["ip_address"], name=d.get("_name") or "",
+                                             reach=self._reach_for(did))
                 if not self._last_connect_error:
                     self._last_connect_error = f"{d['ip_address']} did not respond to pairing"
                 if d.get("_cached"):
@@ -723,16 +755,35 @@ class MideaController:
             if ip in responded_ips or any(u.ip == ip for u in self._units.values()):
                 continue
             placeholder_id = -(1000 + i)
-            self._units[placeholder_id] = MideaUnit(id=placeholder_id, ip=ip, name=p.get("name") or ip, online=False)
+            self._units[placeholder_id] = MideaUnit(id=placeholder_id, ip=ip, name=p.get("name") or ip,
+                                                    reach=self._reach_for(placeholder_id))
 
         if connected_any:
             self._refresh_snapshot()
             self.error = ""
-        elif not self._units:
-            if self._last_seen_count == 0:
-                self.error = "No Midea units responded on the LAN"
-            else:
-                self.error = f"Found {self._last_seen_count} unit(s) but couldn't pair: {self._last_connect_error or 'unknown error'}"
+            return
+        if self._devices:
+            # Nothing new to connect, but units are already up — the ordinary
+            # steady state, not a failure. Their liveness is _refresh_snapshot's.
+            return
+        # Reached nothing at all. The error used to be gated on having no units
+        # either, so a pinned unit's placeholder card suppressed it entirely and
+        # the panel said "connecting..." forever without ever saying why. Record
+        # it against each unreached unit, so the reason lands on the row.
+        if self._last_seen_count == 0:
+            self.error = "No Midea units responded on the LAN"
+        else:
+            self.error = (f"Found {self._last_seen_count} unit(s) but couldn't pair: "
+                          f"{self._last_connect_error or 'unknown error'}")
+        for uid in self._units:
+            # Units hold the same Reachability object this returns, so there is
+            # nothing to write back onto the (frozen) unit.
+            self._reach_for(uid).failed(self.error)
+
+    def _reach_for(self, unit_id: int) -> Reachability:
+        """This unit's reachability, kept across passes — a fresh one each time
+        would reset the grace counter and never reach a verdict."""
+        return self._reach.setdefault(unit_id, Reachability())
 
     def _refresh_snapshot(self) -> None:
         """No network I/O — each connected device's own persistent background
@@ -744,8 +795,17 @@ class MideaController:
             return
         with self._lock:
             for did, dev in self._devices.items():
-                if _status_ready(dev):
-                    self._units[did] = _unit_from_device(dev, self._ips.get(did, ""))
+                if not _status_ready(dev):
+                    continue  # nothing real to publish yet; the placeholder stands
+                reach = self._reach_for(did)
+                # dev.available is the library's own liveness flag, kept current
+                # by the device's background thread. Grace turns a flicker of it
+                # into a card that holds rather than a unit that vanishes.
+                if dev.available:
+                    reach.succeeded()
+                else:
+                    reach.failed("stopped responding")
+                self._units[did] = _unit_from_device(dev, self._ips.get(did, ""), reach)
 
     def _fill_in(self) -> None:
         """Once a unit's card is up, ask for everything else exactly once —
@@ -961,21 +1021,21 @@ class MideaController:
         with self._lock:
             self._units = {
                 151732604866906: MideaUnit(
-                    id=151732604866906, ip="192.168.1.50", name="Living Room", online=True,
-                    contacted=True, caps_known=True, power=True, mode="COOL", fan_speed="MEDIUM",
+                    id=151732604866906, ip="192.168.1.50", name="Living Room",
+                    reach=_live(), caps_known=True, power=True, mode="COOL", fan_speed="MEDIUM",
                     swing_mode="OFF", target_temp_c=24.0, indoor_temp_c=24.0, outdoor_temp_c=23.5,
                     fahrenheit=True, display_on=True,  # keep one demo unit with its display on
                 ),
                 151732604866907: MideaUnit(
-                    id=151732604866907, ip="192.168.1.51", name="Bedroom", online=True,
-                    contacted=True, caps_known=True, power=True, mode="FAN_ONLY", fan_speed="LOW",
+                    id=151732604866907, ip="192.168.1.51", name="Bedroom",
+                    reach=_live(), caps_known=True, power=True, mode="FAN_ONLY", fan_speed="LOW",
                     swing_mode="VERTICAL", target_temp_c=22.0, indoor_temp_c=26.0,
                     outdoor_temp_c=23.5, fahrenheit=True, eco=True, display_on=False,
                     filter_alert=True,
                 ),
                 151732604866908: MideaUnit(
-                    id=151732604866908, ip="192.168.1.52", name="Office", online=False,
-                    contacted=True, caps_known=True, power=False,
+                    id=151732604866908, ip="192.168.1.52", name="Office",
+                    reach=_lost(), caps_known=True, power=False,
                     fahrenheit=True,  # offline, showing last-known
                 ),
             }
@@ -1144,12 +1204,13 @@ class MideaSystem(System):
         of it is live state. The collapsed list and the expanded card both build
         on this, so a unit we can't see says the same thing either way.
 
-        "connecting…" while we've never reached it; "unreachable" only once we
-        had it and lost contact (so a card's dimmed values are real last-known
-        state, not defaults).
+        The wording is the shared reachability one, lowercased to sit in
+        parentheses: "connecting…" while we've never reached it, "unreachable —
+        <reason>" once we had it and lost contact (so a card's dimmed values are
+        real last-known state, not defaults).
         """
         label, _ = unit_badge(u)
-        status = "unreachable" if u.contacted else "connecting..."
+        status = in_parens(u.reach.message)
         return self._dim([Seg(label), Seg(f"  {u.name} ({status})")])
 
     def _header_row(self, u: MideaUnit, is_selected: bool, width: int) -> Line:
