@@ -354,6 +354,25 @@ def test_pinned_discover_probes_when_metadata_missing(monkeypatch):
     assert probed == ["10.0.0.9"]
 
 
+def test_pinned_unit_names_itself_not_a_lan_scan(monkeypatch):
+    """A pinned IP that never answers wasn't scanned for -- it was probed
+    directly, and midealocal's discover() swallows the socket error rather
+    than raising it, so there's no reason to name either. Saying "no units
+    responded on the LAN" reads as a broadcast sweep coming up empty, which
+    isn't what happened here."""
+    ctl = _pinned_controller(monkeypatch, [{"ip": "10.0.0.9", "name": "Den"}])
+    monkeypatch.setattr(midea, "midea_discover", lambda **kw: {})
+    ctl._discover_all()
+    assert ctl.error == "not responding"
+
+
+def test_unpinned_scan_keeps_the_lan_wording(monkeypatch):
+    ctl = _pinned_controller(monkeypatch, [])
+    monkeypatch.setattr(midea, "midea_discover", lambda **kw: {})
+    ctl._discover_all()
+    assert ctl.error == "No Midea units responded on the LAN"
+
+
 class _FakeConnected:
     """Stands in for a freshly connected midealocal device."""
 

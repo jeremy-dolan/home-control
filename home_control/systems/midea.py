@@ -785,7 +785,13 @@ class MideaController:
         # the panel said "connecting..." forever without ever saying why. Record
         # it against each unreached unit, so the reason lands on the row.
         if self._last_seen_count == 0:
-            self.error = "No Midea units responded on the LAN"
+            # A pinned unit was probed directly, not scanned for -- "no units
+            # responded on the LAN" reads as though a broadcast sweep came up
+            # empty, when really *this* address in particular didn't answer.
+            # midealocal's discover() swallows the socket error internally
+            # rather than raising it, so there's no OS-level reason to name
+            # here the way Hue/Roku/Sonos can.
+            self.error = "not responding" if self._pinned else "No Midea units responded on the LAN"
         else:
             self.error = (f"Found {self._last_seen_count} unit(s) but couldn't pair: "
                           f"{self._last_connect_error or 'unknown error'}")
