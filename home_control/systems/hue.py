@@ -16,6 +16,7 @@ import colorsys
 import curses
 import math
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -133,6 +134,27 @@ class BridgeInfo:
 
 # modelid → friendly hardware name (the round v1 vs. square v2 bridge).
 _BRIDGE_MODELS = {"BSB001": "Hue Bridge v1", "BSB002": "Hue Bridge v2"}
+
+
+# phue reports failures with the whole request URL, which embeds the bridge API
+# username — a secret we don't want on screen, and 60-odd cells we don't have.
+_API_URL_RE = re.compile(r"https?://\S*?/api(?:/\S*)?")
+# Both views name the bridge themselves, so the request framing and error codes
+# wrapped around the actual reason are just noise crowding out the reason.
+_REQUEST_RE = re.compile(r"^(?:GET|PUT|POST|DELETE) Request to \S+ (?:failed: )?")
+_CODE_RE = re.compile(r"^(?:Error -?\d+:|\[Errno \d+\])\s*")
+
+
+def scrub_error(msg: str, ip: str) -> str:
+    """Trim a phue error down to the part worth showing on one line.
+
+    ``Error -1: GET Request to http://<ip>/api/<username>/lights/ failed:
+    [Errno 113] No route to host`` → ``No route to host``
+    """
+    msg = _API_URL_RE.sub(ip, msg).strip()
+    msg = _CODE_RE.sub("", msg).strip()
+    msg = _REQUEST_RE.sub("", msg).strip()
+    return _CODE_RE.sub("", msg).strip()
 
 
 def bridge_model_label(model: str) -> str:
@@ -256,17 +278,29 @@ class HueController:
         if self.mock:
             self._load_mock()
             return
-        if not self.connected and not self._connect():
+        if self._bridge is None and not self._connect():
             return
         try:
             rooms, lights = self._fetch_state()
-            with self._lock:
-                self.rooms, self.lights = rooms, lights
         except Exception as e:  # noqa: BLE001 — surface any bridge/network failure
+            # Drop the handle so the next poll rebuilds it, and stop claiming a
+            # connection: `connected` means "the last fetch came back", nothing else.
+            self._bridge = None
             self.connected = False
             self.error = str(e)
+            return
+        with self._lock:
+            self.rooms, self.lights = rooms, lights
+        self.connected = True
+        self.error = ""
 
     def _connect(self) -> bool:
+        """Build the phue handle. Returns True when we *have* a handle — which
+        proves nothing about the bridge being reachable: once a username is
+        cached in ~/.python_hue, `Bridge()` does no network I/O at all, so it
+        succeeds instantly on a foreign network. Only `poll()` may set
+        `connected`, and only after a state fetch actually returns.
+        """
         try:
             from phue import Bridge  # imported lazily so the app runs without phue
             from phue.exceptions import PhueRegistrationException
@@ -277,8 +311,6 @@ class HueController:
             # Short timeout so an unreachable bridge fails fast instead of
             # hanging the poll thread (and any command) for phue's 10s default.
             self._bridge = Bridge(self.ip, timeout=CONNECT_TIMEOUT)
-            self.connected = True
-            self.error = ""
             return True
         except PhueRegistrationException:
             self.error = "Press the bridge link button, then wait..."
@@ -290,10 +322,13 @@ class HueController:
     def _fetch_state(self) -> tuple[list[Room], dict[int, Light]]:
         b = self._bridge
         assert b is not None
-        if not self.info.model:  # static — fetch once
-            self._fetch_config()
         raw_lights = b.request("GET", f"/api/{b.username}/lights/")
         raw_groups = b.request("GET", f"/api/{b.username}/groups/")
+        # After the live requests, not before: /config is best-effort (it swallows
+        # its own errors), so fetching it first would just burn a second timeout
+        # on every poll against an unreachable bridge.
+        if not self.info.model:  # static — fetch once
+            self._fetch_config()
 
         lights: dict[int, Light] = {}
         for lid_str, ld in raw_lights.items():
@@ -908,7 +943,7 @@ class HueSystem(System):
     # -- collapsed ---------------------------------------------------------
     def collapsed_lines(self, width: int) -> list[Line]:
         if not self.ctl.connected:
-            msg = self.ctl.error or "connecting..."
+            msg = scrub_error(self.ctl.error, self.ctl.ip) or "connecting..."
             return [[Seg(f"{self.ctl.ip}: {msg}", dim=True)]]
         # Badge mirrors the Router's "● ONLINE": accent colour, bold, on the left.
         badge = "● CONNECTED"
@@ -937,7 +972,7 @@ class HueSystem(System):
         if not self.ctl.connected:
             if self.ctl.error:
                 region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "fault", bold=True)
-                region.text_wrapped(1, 0, self.ctl.error, dim=True)
+                region.text_wrapped(1, 0, scrub_error(self.ctl.error, self.ctl.ip), dim=True)
             else:
                 region.text(0, 0, f"Connecting to {self.ctl.ip}...", dim=True)
             return

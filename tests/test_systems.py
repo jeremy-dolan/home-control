@@ -36,6 +36,87 @@ def test_brightness_bar_shape():
     assert len(_bar_text(mid)) == hue.BAR_WIDTH and _bar_text(mid).count("◉") == 1
 
 
+def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
+    """phue's Bridge() does no network I/O at all once a username is cached in
+    ~/.python_hue, so building the handle proves nothing about reachability.
+
+    The render thread reads `connected` while a poll is in flight, so what
+    matters is the value *during* the fetch, not only after it: claiming
+    CONNECTED up front badges an unreachable bridge for the whole timeout.
+    """
+    import phue
+
+    ctl = hue.HueController("192.0.2.1")
+    mid_poll: list[bool] = []  # what a render landing mid-fetch would show
+    answered: list[str] = []
+    reachable = False
+
+    class FakeBridge:
+        """Stands in for a paired bridge: constructing it costs nothing (phue
+        reads the cached username off disk), every request hits the network."""
+
+        username = "u"
+
+        def __init__(self, ip, timeout=None):
+            pass
+
+        def request(self, method, path):
+            mid_poll.append(ctl.connected)
+            answered.append(path)
+            if not reachable:
+                raise OSError("GET Request to http://192.0.2.1/api/secretuser/lights/ timed out.")
+            if path.endswith("/lights/"):
+                return {"1": {"name": "Kitchen 1", "state": {"on": True, "bri": 254, "reachable": True}}}
+            if path.endswith("/groups/"):
+                return {"1": {"type": "Room", "name": "Kitchen", "lights": ["1"]}}
+            return {"name": "Bridge", "modelid": "BSB002"}
+
+    monkeypatch.setattr(phue, "Bridge", FakeBridge)
+
+    ctl.poll()
+    assert mid_poll == [False]  # never badged CONNECTED while the fetch hung
+    assert ctl.connected is False
+    assert ctl.summary == ("0 rooms/0 lights · ", "0 on")  # what the badge would have claimed
+    assert ctl._bridge is None  # handle dropped, so the next poll rebuilds it
+
+    # Now a bridge that answers — through the real _fetch_state, so the fetch
+    # order (lights/groups first, best-effort /config after) is covered too.
+    reachable = True
+    ctl.poll()
+    assert not any(mid_poll)  # still claimed nothing until a fetch came back
+    assert ctl.connected is True and ctl.error == ""
+    assert ctl.summary == ("1 rooms/1 lights · ", "1 on")
+    assert answered[1].endswith("/lights/") and answered[-1].endswith("/config")
+
+    reachable = False
+    ctl.poll()
+    assert ctl.connected is False  # and it drops back out when the bridge goes away
+
+
+def test_hue_scrub_error_hides_api_username():
+    raw = "Error -1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ timed out."
+    out = hue.scrub_error(raw, "192.168.1.99")
+    assert out == "timed out."
+    assert "sUp3rSecret" not in out
+    # The failure worth reading survives; the errno and the framing don't.
+    assert hue.scrub_error(
+        "Error -1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ failed: "
+        "[Errno 113] No route to host",
+        "192.168.1.99",
+    ) == "No route to host"
+    # The registration POST's URL ends at a bare /api — also collapsed.
+    assert hue.scrub_error("POST Request to http://192.0.2.1/api timed out.", "192.0.2.1") == "timed out."
+    # A bridge that answers with a real complaint keeps it.
+    assert hue.scrub_error(
+        "Error 1: GET Request to http://192.168.1.99/api/sUp3rSecret/lights/ failed: unauthorized user",
+        "192.168.1.99",
+    ) == "unauthorized user"
+    # Messages without a URL pass through untouched.
+    assert hue.scrub_error("Press the bridge link button, then wait...", "192.168.1.99") == (
+        "Press the bridge link button, then wait..."
+    )
+
+
 def test_hue_clock_sync_pushes_host_time(monkeypatch):
     # The mock config's fixed 2026-07-21 clock is always well past
     # CLOCK_DRIFT_WARN from "now", so the drift path is live under mock.
