@@ -543,6 +543,11 @@ class RokuSystem(System):
             if n > 1:
                 return f"Connecting... (first of {n} discovered)"
             return reach.message
+        if not reach.ever and not self.ctl.ip:
+            # Grace ran out on the discovery search itself, not a particular
+            # host — `reach.message` alone ("unreachable") would read as
+            # though one had been tried.
+            return "No Roku found on the network"
         msg = reach.message
         # Past grace: name the box the way Hue names the bridge. Not while
         # merely reconnecting — that keeps the bare shared wording.
@@ -590,11 +595,13 @@ class RokuSystem(System):
             # second line, never changes the first.
             region.text(0, 0, self._status(), dim=True)
             reach = self.ctl.reach
-            if reach.state == CONNECTING:
-                if self.ctl.ip:
+            if self.ctl.ip:
+                # Nothing to name if discovery itself came up empty — line 1
+                # already says so.
+                if reach.state == CONNECTING:
                     region.text(1, 0, self.ctl.ip, dim=True)
-            else:
-                region.text(1, 0, "Roku unreachable", "fault")
+                else:
+                    region.text(1, 0, "Roku unreachable", "fault")
             return
         self._render_header(region)
         if self.mode == "keyboard":

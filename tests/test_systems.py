@@ -123,6 +123,16 @@ def test_roku_stops_saying_connecting_once_grace_runs_out():
     assert sysm._status() == "reconnecting..." and sysm.ctl.connected
 
 
+def test_roku_names_the_search_not_a_host_when_discovery_finds_nothing():
+    """A never-configured Roku has no IP to blame -- "unreachable" alone would
+    read as though a specific host had been tried and failed."""
+    sysm = roku.RokuSystem()
+    sysm.ctl.ip = None
+    for _ in range(base.GRACE_ATTEMPTS):
+        sysm.ctl.reach.failed()
+    assert sysm._status() == "No Roku found on the network"
+
+
 def test_hue_collapsed_line_names_the_bridge_only_on_failure():
     sysm = hue.HueSystem()
     sysm.ctl.ip = "192.168.1.99"
