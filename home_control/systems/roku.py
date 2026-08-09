@@ -591,18 +591,22 @@ class RokuSystem(System):
         # we've seen the device, a blip keeps the full remote on screen (with a
         # marker) rather than dropping every hotkey and control hint.
         if not self.ctl.connected and not self.ctl.ever_connected:
-            # Line 1 always matches what collapsed shows; expanding only adds a
+            reach = self.ctl.reach
+            if reach.state == CONNECTING and self.ctl.ip:
+                # One line carries it all here -- "Connecting..." plus a
+                # separate IP line said the same thing twice.
+                source = "auto-discovered" if self.ctl.auto else "configured"
+                n = self.ctl.discovered_count
+                detail = f"{source}, first of {n}" if n > 1 else source
+                region.text(0, 0, f"Connecting to {self.ctl.ip} ({detail})", dim=True)
+                return
+            # Line 1 matches what collapsed shows; expanding only adds a
             # second line, never changes the first.
             region.text(0, 0, self._status(), dim=True)
-            reach = self.ctl.reach
             if self.ctl.ip:
                 # Nothing to name if discovery itself came up empty — line 1
                 # already says so.
-                if reach.state == CONNECTING:
-                    source = "auto-discovered" if self.ctl.auto else "configured"
-                    region.text(1, 0, f"Connecting to {self.ctl.ip} ({source})", dim=True)
-                else:
-                    region.text(1, 0, "Roku unreachable", "fault")
+                region.text(1, 0, "Roku unreachable", "fault")
             return
         self._render_header(region)
         if self.mode == "keyboard":

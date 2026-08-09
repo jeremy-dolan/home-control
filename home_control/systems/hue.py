@@ -967,13 +967,15 @@ class HueSystem(System):
         rooms, lights = self.ctl.snapshot()
         reach = self.ctl.reach
         if not reach.has_values:
-            # Line 1 always matches what collapsed shows; expanding only adds a
-            # second line, never changes the first.
-            region.segs(0, self.collapsed_lines(region.width)[0])
             if reach.state == CONNECTING:
+                # One line carries it all here -- "Connecting..." plus a
+                # separate IP line said the same thing twice.
                 source = "configured" if self.ctl.ip_configured else "default"
-                region.text(1, 0, f"Connecting to {self.ctl.ip} ({source})", dim=True)
+                region.text(0, 0, f"Connecting to {self.ctl.ip} ({source})", dim=True)
             else:
+                # Line 1 matches what collapsed shows; expanding only adds a
+                # second line, never changes the first.
+                region.segs(0, self.collapsed_lines(region.width)[0])
                 region.text(1, 0, "Bridge unreachable", "fault")
             return
 
