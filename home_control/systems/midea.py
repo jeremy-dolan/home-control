@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from aiohttp import ClientSession
+from midealocal import device as _midealocal_device
 from midealocal.cloud import get_midea_cloud
 from midealocal.const import DeviceType
 from midealocal.devices import device_selector
@@ -86,9 +87,18 @@ from ..ui import (
 )
 from .base import Popup, Reachability, System, VoiceAction, in_parens
 
-# Minimum gap between discovery attempts. A failure here can be a cloud-side
-# auth rate limit — retrying every poll tick (as fast as 1s when focused)
-# would hammer that endpoint, unlike Roku's cheap local-only SSDP retry.
+# midealocal's own TCP connect timeout defaults to 10s -- well past every
+# other panel's per-attempt cost (Hue 4s, Roku 5s, Sonos 4s) -- so a paired
+# unit that's merely offline took far longer than anything else to report
+# why. Match it to the same range; it's a plain module global the library
+# re-reads on every connect(), so this only needs setting once.
+_midealocal_device.SOCKET_TIMEOUT = 5
+
+# Minimum gap between cloud pairing attempts (a new V3 unit with no cached
+# token). A failure there can be a cloud-side auth rate limit — retrying
+# every poll tick (as fast as 1s when focused) would hammer that endpoint.
+# Local discovery itself isn't gated by this: a paired unit's UDP probe never
+# touches the cloud, and is as cheap to retry as Roku's SSDP sweep.
 DISCOVERY_RETRY_INTERVAL = 60
 # The AC's setpoint resolution: it stores half-degrees Celsius, and
 # MessageGeneralSet encodes the integer part with int() but the half-degree
@@ -535,8 +545,8 @@ class MideaController:
         self._token_cache = _load_token_cache()
         self.error = ""
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
-        self._attempted = False           # has a real discovery pass ever run
-        self._last_attempt_t = 0.0
+        self._attempted = False           # has a cloud pairing call ever been made
+        self._last_attempt_t = 0.0        # ...and when, for DISCOVERY_RETRY_INTERVAL
         self._last_seen_count = 0         # raw devices seen in the last pass
         self._last_connect_error = ""     # most recent per-device connect/auth failure
         if not self.mock:
@@ -644,15 +654,13 @@ class MideaController:
             pass
 
     def _discover_all(self) -> None:
-        """Run a discovery pass, gated by DISCOVERY_RETRY_INTERVAL — a failure
-        here is often a cloud-side rate limit, so this must not be retried on
-        every poll tick like Roku's cheap local SSDP retry."""
-        now = time.time()
-        if self._attempted and now - self._last_attempt_t < DISCOVERY_RETRY_INTERVAL:
-            return
-        self._last_attempt_t = now
-        self._attempted = True
-
+        """Run a discovery pass. The local UDP broadcast/probe is cheap and
+        retries every poll tick, same as Roku's SSDP sweep — a pinned, already
+        -paired unit never touches the cloud, so gating that on
+        DISCOVERY_RETRY_INTERVAL only delayed noticing it came back. Only the
+        cloud pairing call below (a new V3 unit with no cached token) stays
+        rate-limited: a failure there is often a cloud-side auth rate limit,
+        unlike a plain unanswered probe."""
         raw = self._discover_raw()
         self._last_seen_count = len(raw)
         self._last_connect_error = ""
@@ -664,10 +672,16 @@ class MideaController:
         ]
         keys_by_device: dict[int, dict[int, dict[str, str]]] = {}
         if new_v3_ids and self._account and self._password:
-            try:
-                keys_by_device = asyncio.run(self._fetch_keys(new_v3_ids))
-            except Exception as e:
-                self._last_connect_error = str(e) or type(e).__name__
+            now = time.time()
+            if self._attempted and now - self._last_attempt_t < DISCOVERY_RETRY_INTERVAL:
+                self._last_connect_error = "cloud pairing rate-limited, retrying shortly"
+            else:
+                self._last_attempt_t = now
+                self._attempted = True
+                try:
+                    keys_by_device = asyncio.run(self._fetch_keys(new_v3_ids))
+                except Exception as e:
+                    self._last_connect_error = str(e) or type(e).__name__
 
         connected_any = False
         responded_ips = {d["ip_address"] for d in raw.values()}
