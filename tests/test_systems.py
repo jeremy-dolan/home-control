@@ -256,11 +256,37 @@ def test_parse_speakers():
 
 def _zone(name, state="PLAYING", vol=30, grouped=False, title="", artist=""):
     track = sonos.TrackInfo(title=title, artist=artist) if title else None
-    return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track)
+    return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track,
+                           online=True, contacted=True)
 
 
 def _row_text(line):
     return "".join(s.text for s in line)
+
+
+def test_sonos_unread_speaker_claims_no_state():
+    """A speaker we couldn't read defaults to STOPPED at volume 0 — real-looking
+    values we never fetched. Both rows must say so instead of rendering them."""
+    sysm = sonos.SonosSystem()
+    zone = sonos.ZoneState(name="Living Room")  # never contacted
+    collapsed = _row_text(sysm._independent_row(zone, 78))
+    assert collapsed.startswith("● ????")
+    assert "Living Room (connecting...)" in collapsed
+    assert "STOPPED" not in collapsed and "vol" not in collapsed
+    expanded = _row_text(sysm._zone_row(zone, False, 78))
+    assert "Living Room" in expanded and "● ????" in expanded
+    assert "(connecting...)" in expanded and "%" not in expanded
+    # Nothing on either row is bright: none of it is a reading.
+    assert all(s.dim for s in sysm._independent_row(zone, 78))
+
+    # Once we've read it and lost it, the wording changes — those dimmed values
+    # would be real last-known state, not defaults.
+    dropped = sonos.ZoneState(name="Living Room", contacted=True)
+    assert "(unreachable)" in _row_text(sysm._independent_row(dropped, 78))
+
+    # A live speaker is untouched.
+    live = _zone("Kitchen", state="PLAYING", vol=25)
+    assert "PLAYING" in _row_text(sysm._independent_row(live, 78))
 
 
 def test_midea_offline_unit_row_matches_the_card():

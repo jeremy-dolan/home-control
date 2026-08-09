@@ -81,6 +81,13 @@ class ZoneState:
     shuffle: bool = False
     repeat: bool = False
     cross_fade: bool = False
+    # Every field above defaults to something a real speaker could report, so a
+    # zone we failed to read is indistinguishable from a stopped one at volume 0
+    # unless it says so. `online` is this poll's reading; `contacted` stays True
+    # once we've ever had real values, which is what separates "connecting..."
+    # from "unreachable". Both default False: assume nothing until a read lands.
+    online: bool = False
+    contacted: bool = False
 
 
 @dataclass
@@ -137,6 +144,15 @@ def badge(transport_state: str) -> tuple[str, str]:
 # Width of the widest badge label ("▶ PLAYING" / "■ STOPPED" / "⟳ LOADING"),
 # so the state column lines up across the independent per-speaker rows.
 BADGE_W = max(len(text) for text, _ in _BADGES.values())
+
+# Not a transport state — what we show instead of one for a speaker we haven't
+# read, where even "STOPPED" would be a claim about state we don't have.
+UNKNOWN_BADGE = "● ????"
+
+
+def offline_status(zone: ZoneState) -> str:
+    """Why a zone has no state: still reaching for it, or had it and lost it."""
+    return "unreachable" if zone.contacted else "connecting..."
 
 
 def _fully_grouped(zones: list[ZoneState]) -> bool:
@@ -226,6 +242,9 @@ class SonosController:
         self.queue_items: list[QueueItem] = []
         self.favorites: list[FavoriteItem] = []
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
+        # IPs we have ever read real state from, so a speaker that drops off
+        # reads "unreachable" rather than a permanent "connecting...".
+        self._ever_read: set[str] = set()
         # Pinned speakers (ip, name_override) skip SSDP; empty → auto-discover.
         self._pinned = _parse_speakers(config.get("sonos", "speakers", []))
         self._name_overrides = {ip: name for ip, name in self._pinned if name}
@@ -323,14 +342,19 @@ class SonosController:
 
     def _display_name(self, device) -> str:
         """The name to show for a device: the config override if pinned with one,
-        else the speaker's own Sonos room name (never raises)."""
+        else the speaker's own Sonos room name (never raises).
+
+        Asking the speaker its name is itself a request, so an unreachable one
+        falls back to its IP — which at least identifies which speaker is
+        missing, where "Unknown" identifies nothing.
+        """
         ip = getattr(device, "ip_address", "")
         if ip in self._name_overrides:
             return self._name_overrides[ip]
         try:
             return device.player_name
         except Exception:  # noqa: BLE001
-            return "Unknown"
+            return ip or "Unknown"
 
     # -- pinning / new-device accessors ------------------------------------
     def pinned_count(self) -> int:
@@ -395,15 +419,20 @@ class SonosController:
                 shuffle, repeat, cross_fade = coord.shuffle, coord.repeat, coord.cross_fade
             except Exception:  # noqa: BLE001
                 shuffle = repeat = cross_fade = False
+            self._ever_read.add(getattr(device, "ip_address", ""))
             return ZoneState(
                 name=self._display_name(device),
                 transport_state=transport.get("current_transport_state", "STOPPED"),
                 volume=device.volume, muted=device.mute,
                 grouped=grouped, queue_size=queue_size, track=track,
                 shuffle=shuffle, repeat=repeat, cross_fade=cross_fade,
+                online=True, contacted=True,
             )
         except Exception:  # noqa: BLE001
-            return ZoneState(name=self._display_name(device))
+            # No reading at all — every field would be a default, so the zone
+            # carries only its name and the fact that we couldn't reach it.
+            return ZoneState(name=self._display_name(device),
+                             contacted=getattr(device, "ip_address", "") in self._ever_read)
 
     def _poll_active_fast(self) -> None:
         """Light refresh of just the active zone's transport + track."""
@@ -822,8 +851,10 @@ class SonosController:
         with self._lock:
             self.discovered = True
             self.zones = [
-                ZoneState("Living Room", "PLAYING", 38, False, True, 12, track),
-                ZoneState("Kitchen", "PLAYING", 25, False, True, 12, track),
+                ZoneState("Living Room", "PLAYING", 38, False, True, 12, track,
+                          online=True, contacted=True),
+                ZoneState("Kitchen", "PLAYING", 25, False, True, 12, track,
+                          online=True, contacted=True),
             ]
         self.queue_items = [
             QueueItem(0, "Autumn Leaves", "Cannonball Adderley"),
@@ -913,6 +944,11 @@ class SonosSystem(System):
     def _independent_row(self, zone: ZoneState, width: int) -> Line:
         """One speaker's status on a single line: state badge, name, now-playing,
         and a right-aligned volume. Song + volume dim when it isn't playing."""
+        if not zone.online:
+            # Nothing here is a reading, so nothing here is bright: no transport
+            # badge, no "vol 0" for a volume we never asked about.
+            return [Seg(f"{UNKNOWN_BADGE:<{BADGE_W}}", dim=True), Seg("  ", dim=True),
+                    Seg(f"{zone.name} ({offline_status(zone)})", dim=True)]
         label, state = badge(zone.transport_state)
         color = badge_color(state, self.color)
         playing = zone.transport_state == "PLAYING"
@@ -1030,6 +1066,13 @@ class SonosSystem(System):
             region.text(row, 20, trunc(txt, region.width - 20), bold=sel)
 
     def _zone_row(self, zone: ZoneState, active: bool, width: int) -> Line:
+        if not zone.online:
+            # Same columns as a live row so the list still lines up, but the
+            # badge says "????" and the volume bar is gone rather than drawn at 0.
+            return [cursor(self.color, active),
+                    Seg(f"{zone.name:<16}  ", dim=True),
+                    Seg(f"{UNKNOWN_BADGE:<10}", dim=True),
+                    Seg(f"  ({offline_status(zone)})", dim=True)]
         label, state = badge(zone.transport_state)
         color = badge_color(state, self.color)
         mute = "M" if zone.muted else " "
