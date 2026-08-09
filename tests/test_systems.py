@@ -388,6 +388,40 @@ def test_sonos_speakers_get_their_own_grace():
     assert ctl._reach["10.0.0.3"] is zone.reach
 
 
+def test_sonos_a_persistently_failing_volume_read_still_gives_up():
+    """volume/mute are live SoCo calls too, made after everything else in the
+    read succeeds. Regression: `reach.succeeded()` used to run before them, so
+    a speaker that always answers transport/track/queue but never volume kept
+    resetting its own grace counter every poll and stayed "online" forever."""
+    ctl = sonos.SonosController()
+
+    class FlakyVolumeSpeaker:
+        ip_address = "10.0.0.4"
+        mute = False
+        group = None
+
+        def get_current_transport_info(self):
+            return {"current_transport_state": "PLAYING"}
+
+        def get_current_track_info(self):
+            return {}
+
+        def get_queue(self):
+            return []
+
+        @property
+        def volume(self):
+            raise OSError("No route to host")
+
+    dev = FlakyVolumeSpeaker()
+    ctl._devices = [dev]
+    for _ in range(base.GRACE_ATTEMPTS):
+        ctl._poll_all()
+    zone = ctl.zones[0]
+    assert not zone.online
+    assert sonos.offline_status(zone) == "no route to host"
+
+
 def test_midea_offline_unit_row_matches_the_card():
     """The collapsed row and the expanded card header say the same thing about a
     unit we can't see — the card's version was the honest one."""

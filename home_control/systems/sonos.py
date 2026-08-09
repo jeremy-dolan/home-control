@@ -398,12 +398,7 @@ class SonosController:
         return sorted(devices, key=lambda d: d.player_name)
 
     def _coordinator(self, device):
-        """This zone's authoritative playback source: the group coordinator if
-        grouped, else the device itself. Raises on network failure rather than
-        swallowing it -- `_read_zone`'s own except handles that, and letting a
-        failed group lookup fall through to a second call
-        (`get_current_transport_info`) on the same unreachable device would
-        just double the wait for a doomed read."""
+        """Return the group coordinator, or the device when ungrouped."""
         group = device.group
         return group.coordinator if group else device
 
@@ -449,11 +444,17 @@ class SonosController:
                 shuffle, repeat, cross_fade = coord.shuffle, coord.repeat, coord.cross_fade
             except Exception:  # noqa: BLE001
                 shuffle = repeat = cross_fade = False
+            # Read the remaining fields before declaring success -- volume and
+            # mute are live SoCo calls too, and succeeding early would let a
+            # persistent failure here reset `fails` to 0 every poll, never
+            # reaching grace.
+            name = self._display_name(device)
+            volume, muted = device.volume, device.mute
             reach.succeeded()
             return ZoneState(
-                name=self._display_name(device),
+                name=name,
                 transport_state=transport.get("current_transport_state", "STOPPED"),
-                volume=device.volume, muted=device.mute,
+                volume=volume, muted=muted,
                 grouped=grouped, queue_size=queue_size, track=track,
                 shuffle=shuffle, repeat=repeat, cross_fade=cross_fade,
                 reach=reach,
