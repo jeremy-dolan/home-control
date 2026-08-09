@@ -398,13 +398,14 @@ class SonosController:
         return sorted(devices, key=lambda d: d.player_name)
 
     def _coordinator(self, device):
-        try:
-            group = device.group
-            if group:
-                return group.coordinator
-        except Exception:  # noqa: BLE001
-            pass
-        return device
+        """This zone's authoritative playback source: the group coordinator if
+        grouped, else the device itself. Raises on network failure rather than
+        swallowing it -- `_read_zone`'s own except handles that, and letting a
+        failed group lookup fall through to a second call
+        (`get_current_transport_info`) on the same unreachable device would
+        just double the wait for a doomed read."""
+        group = device.group
+        return group.coordinator if group else device
 
     def _poll_all(self) -> None:
         zones = [self._read_zone(d) for d in self._devices]
@@ -462,10 +463,15 @@ class SonosController:
             # carries only its name and why there's nothing behind it. Inside
             # grace the previous zone's values stand, so hand those back.
             reach.failed(str(e))
-            if reach.has_values:
-                return next((z for z in self.zones if z.reach is reach),
-                            ZoneState(name=self._display_name(device), reach=reach))
-            return ZoneState(name=self._display_name(device), reach=reach)
+            prev = next((z for z in self.zones if z.reach is reach), None)
+            if reach.has_values and prev is not None:
+                return prev
+            # It just failed to answer -- asking it for its own name would
+            # only be a second timeout for the same reason. Reuse what we
+            # already know instead of touching the network again.
+            ip = getattr(device, "ip_address", "")
+            name = (prev.name if prev else None) or self._name_overrides.get(ip) or ip or "Unknown"
+            return ZoneState(name=name, reach=reach)
 
     def _poll_active_fast(self) -> None:
         """Light refresh of just the active zone's transport + track."""

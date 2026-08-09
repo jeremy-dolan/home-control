@@ -338,6 +338,7 @@ def test_sonos_speakers_get_their_own_grace():
         ip_address = "10.0.0.3"
         answering = True
         volume, mute = 31, False
+        group = None  # ungrouped: _coordinator falls back to the device itself
 
         def get_current_transport_info(self):
             if not self.answering:
