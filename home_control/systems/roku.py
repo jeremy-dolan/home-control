@@ -599,7 +599,8 @@ class RokuSystem(System):
                 # Nothing to name if discovery itself came up empty — line 1
                 # already says so.
                 if reach.state == CONNECTING:
-                    region.text(1, 0, self.ctl.ip, dim=True)
+                    source = "auto-discovered" if self.ctl.auto else "configured"
+                    region.text(1, 0, f"Connecting to {self.ctl.ip} ({source})", dim=True)
                 else:
                     region.text(1, 0, "Roku unreachable", "fault")
             return

@@ -148,6 +148,22 @@ def test_hue_collapsed_line_names_the_bridge_only_on_failure():
     assert text() == "192.168.1.99: No route to host"
 
 
+def test_hue_tracks_whether_the_bridge_ip_is_configured(monkeypatch):
+    """Unlike Roku, Hue has no auto-discovery mode -- its IP is always either
+    the user's config.toml value or the hardcoded BRIDGE_IP fallback. Track
+    which, so the connecting line can say so honestly."""
+    monkeypatch.setattr(hue.config, "get", lambda *a: (a[2] if len(a) > 2 else None))
+    ctl = hue.HueController()
+    assert ctl.ip == hue.BRIDGE_IP and ctl.ip_configured is False
+
+    monkeypatch.setattr(hue.config, "get", lambda *a: "10.0.0.5")
+    ctl = hue.HueController()
+    assert ctl.ip == "10.0.0.5" and ctl.ip_configured is True
+
+    # An explicit constructor arg counts as configured too.
+    assert hue.HueController("10.0.0.6").ip_configured is True
+
+
 def test_hue_clock_sync_pushes_host_time(monkeypatch):
     # The mock config's fixed 2026-07-21 clock is always well past
     # CLOCK_DRIFT_WARN from "now", so the drift path is live under mock.

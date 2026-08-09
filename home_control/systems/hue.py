@@ -238,7 +238,12 @@ def light_color(ls: Light) -> tuple[tuple[int, int, int], str] | None:
 
 class HueController:
     def __init__(self, ip: str | None = None):
-        self.ip = ip or config.get("hue", "bridge_ip", BRIDGE_IP)
+        configured = config.get("hue", "bridge_ip")
+        self.ip = ip or configured or BRIDGE_IP
+        # Whether `ip` came from the user (an override or config.toml) or is
+        # just the hardcoded fallback -- shown while connecting so a wrong
+        # address reads as "you set this" vs. "this is a guess."
+        self.ip_configured = bool(ip or configured)
         self._bridge = None
         self._lock = threading.Lock()
         self.reach = Reachability()
@@ -966,7 +971,8 @@ class HueSystem(System):
             # second line, never changes the first.
             region.segs(0, self.collapsed_lines(region.width)[0])
             if reach.state == CONNECTING:
-                region.text(1, 0, self.ctl.ip, dim=True)
+                source = "configured" if self.ctl.ip_configured else "default"
+                region.text(1, 0, f"Connecting to {self.ctl.ip} ({source})", dim=True)
             else:
                 region.text(1, 0, "Bridge unreachable", "fault")
             return
