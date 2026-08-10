@@ -16,8 +16,10 @@ Operating guidance for coding agents in this repo. Read alongside
 
 - The codebase runs a deliberately low comment density. Reserve inline
   comments for non-obvious behavior of code that is *present*.
-- **Don't comment on code that isn't there** — put the reason something was
-  removed in the commit message, not a note at the site.
+- **Don't comment on code that isn't there** — a sentence in the commit body
+  covers why something was removed; don't also narrate it at the site. This
+  especially applies when writing the fix for a bug: state the current
+  behavior as a plain fact, not as a change from the bug you just removed.
 
 ## Commit messages
 
