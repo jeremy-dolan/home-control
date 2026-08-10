@@ -6,7 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from home_control import ui
-from home_control.systems import hue, roku, sonos
+from home_control.systems import base, hue, midea, roku, sonos
 
 # --- Hue ---------------------------------------------------------------------
 
@@ -34,6 +34,134 @@ def test_brightness_bar_shape():
     # mid → constant width, exactly one knob
     mid = hue.brightness_bar(127, on=True, color="hue_blue")
     assert len(_bar_text(mid)) == hue.BAR_WIDTH and _bar_text(mid).count("◉") == 1
+
+
+def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
+    """phue's Bridge() does no network I/O at all once a username is cached in
+    ~/.python_hue, so building the handle proves nothing about reachability.
+
+    The render thread reads `connected` while a poll is in flight, so what
+    matters is the value *during* the fetch, not only after it: claiming
+    CONNECTED up front badges an unreachable bridge for the whole timeout.
+    """
+    import phue
+
+    ctl = hue.HueController("192.0.2.1")
+    mid_poll: list[bool] = []  # what a render landing mid-fetch would show
+    answered: list[str] = []
+    reachable = False
+
+    class FakeBridge:
+        """Stands in for a paired bridge: constructing it costs nothing (phue
+        reads the cached username off disk), every request hits the network."""
+
+        username = "u"
+
+        def __init__(self, ip, timeout=None):
+            pass
+
+        def request(self, method, path):
+            mid_poll.append(ctl.connected)
+            answered.append(path)
+            if not reachable:
+                raise OSError("GET Request to http://192.0.2.1/api/secretuser/lights/ timed out.")
+            if path.endswith("/lights/"):
+                return {"1": {"name": "Kitchen 1", "state": {"on": True, "bri": 254, "reachable": True}}}
+            if path.endswith("/groups/"):
+                return {"1": {"type": "Room", "name": "Kitchen", "lights": ["1"]}}
+            return {"name": "Bridge", "modelid": "BSB002"}
+
+    monkeypatch.setattr(phue, "Bridge", FakeBridge)
+
+    ctl.poll()
+    assert mid_poll == [False]  # never badged CONNECTED while the fetch hung
+    assert ctl.connected is False
+    assert ctl.summary == ("0 rooms/0 lights · ", "0 on")  # what the badge would have claimed
+    assert ctl._bridge is None  # handle dropped, so the next poll rebuilds it
+
+    # Now a bridge that answers — through the real _fetch_state, so the fetch
+    # order (lights/groups first, best-effort /config after) is covered too.
+    reachable = True
+    ctl.poll()
+    assert not any(mid_poll)  # still claimed nothing until a fetch came back
+    assert ctl.connected is True and ctl.error == ""
+    assert ctl.summary == ("1 rooms/1 lights · ", "1 on")
+    assert answered[1].endswith("/lights/") and answered[-1].endswith("/config")
+
+    # A bridge that goes away keeps its last reading for the grace window, then
+    # stops being something we can claim.
+    reachable = False
+    ctl.poll()
+    assert ctl.connected is True, "one missed beat isn't a disconnection"
+    for _ in range(base.GRACE_ATTEMPTS):
+        ctl.poll()
+    assert ctl.connected is False
+
+
+def test_roku_stops_saying_connecting_once_grace_runs_out():
+    """Roku used to leave `error` empty on purpose so the panel sat on
+    "Connecting..." indefinitely — patience with a box waking from standby, but
+    it never ended. Grace keeps the patience and gives it a limit."""
+    sysm = roku.RokuSystem()
+    sysm.ctl.ip = "10.0.0.7"  # have an IP → past the discovery phase
+
+    assert sysm._status() == "Connecting..."
+    for _ in range(base.GRACE_ATTEMPTS - 1):
+        sysm.ctl.reach.failed("[Errno 113] No route to host")
+        assert sysm._status() == "Connecting...", "still waking, maybe"
+    sysm.ctl.reach.failed("[Errno 113] No route to host")
+    assert sysm._status() == "10.0.0.7: No route to host"
+
+    # Discovery is still this panel's own phase, ahead of any of that.
+    fresh = roku.RokuSystem()
+    fresh.ctl.ip = None
+    assert fresh._status() == "Discovering..."
+
+    # A box we've had keeps its values through a blip, and says so.
+    sysm.ctl.reach.succeeded()
+    sysm.ctl.reach.failed("[Errno 113] No route to host")
+    assert sysm._status() == "Reconnecting..." and sysm.ctl.connected
+
+
+def test_roku_names_the_search_not_a_host_when_discovery_finds_nothing():
+    """A never-configured Roku has no IP to blame -- "unreachable" alone would
+    read as though a specific host had been tried and failed."""
+    sysm = roku.RokuSystem()
+    sysm.ctl.ip = None
+    for _ in range(base.GRACE_ATTEMPTS):
+        sysm.ctl.reach.failed()
+    assert sysm._status() == "No Roku found on the network"
+
+
+def test_hue_collapsed_line_names_the_bridge_only_on_failure():
+    sysm = hue.HueSystem()
+    sysm.ctl.ip = "192.168.1.99"
+
+    def text():
+        return "".join(s.text for s in sysm.collapsed_lines(78)[0])
+
+    assert text() == "Connecting..."  # nothing has failed yet; the IP is just noise
+    for _ in range(base.GRACE_ATTEMPTS):
+        sysm.ctl.reach.failed(
+            "Error -1: GET Request to http://192.168.1.99/api/sEcret/lights/ failed: [Errno 113] No route to host"
+        )
+    assert text() == "192.168.1.99: No route to host"
+
+
+def test_hue_tracks_whether_the_bridge_ip_is_configured(monkeypatch):
+    """Unlike Roku, Hue has no auto-discovery mode -- its IP is always either
+    the user's config.toml value or the hardcoded BRIDGE_IP fallback. Track
+    which, so the connecting line can say so honestly."""
+    monkeypatch.setattr(hue.config, "get", lambda *a: (a[2] if len(a) > 2 else None))
+    ctl = hue.HueController()
+    assert ctl.ip == hue.BRIDGE_IP and ctl.ip_configured is False
+
+    monkeypatch.setattr(hue.config, "get", lambda *a: "10.0.0.5")
+    ctl = hue.HueController()
+    assert ctl.ip == "10.0.0.5" and ctl.ip_configured is True
+
+    # An explicit constructor arg counts as configured too.
+    assert hue.HueController("10.0.0.6").ip_configured is True
 
 
 def test_hue_clock_sync_pushes_host_time(monkeypatch):
@@ -161,7 +289,158 @@ def test_parse_speakers():
 
 def _zone(name, state="PLAYING", vol=30, grouped=False, title="", artist=""):
     track = sonos.TrackInfo(title=title, artist=artist) if title else None
-    return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track)
+    return sonos.ZoneState(name=name, transport_state=state, volume=vol, grouped=grouped, track=track,
+                           reach=sonos._live())
+
+
+def _row_text(line):
+    return "".join(s.text for s in line)
+
+
+def test_sonos_waiting_message_matches_what_it_is_doing():
+    """Pinned speakers skip SSDP, so the panel mustn't call that discovery — and
+    the collapsed and expanded views must not disagree about which it is."""
+    sysm = sonos.SonosSystem()
+
+    sysm.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}])
+    sysm.ctl.zones = []  # ignore ambient config's own placeholder seeding
+    assert sysm._waiting_message() == "Connecting..."
+    assert _row_text(sysm.collapsed_lines(78)[0]) == "Connecting..."
+
+    sysm.ctl._pinned = []
+    sysm.ctl.zones = []
+    assert sysm._waiting_message() == "Discovering speakers..."
+    assert _row_text(sysm.collapsed_lines(78)[0]) == "Discovering speakers..."
+
+    # A real failure outranks both.
+    sysm.ctl.error = "no Sonos devices found"
+    assert sysm._waiting_message() == "no Sonos devices found"
+
+
+def test_sonos_unread_speaker_claims_no_state():
+    """A speaker we couldn't read defaults to STOPPED at volume 0 — real-looking
+    values we never fetched. Both rows must say so instead of rendering them."""
+    sysm = sonos.SonosSystem()
+    zone = sonos.ZoneState(name="Living Room")  # never contacted
+    collapsed = _row_text(sysm._independent_row(zone, 78))
+    assert collapsed.startswith("● ????")
+    assert "Living Room (connecting...)" in collapsed
+    assert "STOPPED" not in collapsed and "vol" not in collapsed
+    expanded = _row_text(sysm._zone_row(zone, False, 78))
+    assert "Living Room" in expanded and "● ????" in expanded
+    assert "(connecting...)" in expanded and "%" not in expanded
+    # Nothing on either row is bright: none of it is a reading.
+    assert all(s.dim for s in sysm._independent_row(zone, 78))
+
+    # Once we've read it and lost it past grace, the wording changes — those
+    # dimmed values would be real last-known state, not defaults.
+    dropped = sonos.ZoneState(name="Living Room", reach=sonos._live())
+    for _ in range(base.GRACE_ATTEMPTS):
+        dropped.reach.failed("No route to host")
+    assert "(unreachable — No route to host)" in _row_text(sysm._independent_row(dropped, 78))
+
+    # A live speaker is untouched.
+    live = _zone("Kitchen", state="PLAYING", vol=25)
+    assert "PLAYING" in _row_text(sysm._independent_row(live, 78))
+
+
+def test_sonos_speakers_get_their_own_grace():
+    """Speakers fail independently, so each carries its own reachability — and it
+    has to survive across polls, or the grace counter resets every tick and the
+    verdict never arrives."""
+    ctl = sonos.SonosController()
+
+    class FakeSpeaker:
+        ip_address = "10.0.0.3"
+        answering = True
+        volume, mute = 31, False
+        group = None  # ungrouped: _coordinator falls back to the device itself
+
+        def get_current_transport_info(self):
+            if not self.answering:
+                raise OSError("No route to host")
+            return {"current_transport_state": "PLAYING"}
+
+        def get_current_track_info(self):
+            return {"title": "Work Song", "artist": "Nat Adderley"}
+
+        def get_queue(self):
+            return []
+
+    dev = FakeSpeaker()
+    ctl._devices = [dev]
+    ctl._poll_all()
+    assert ctl.zones[0].transport_state == "PLAYING" and ctl.zones[0].online
+
+    dev.answering = False
+    ctl._poll_all()
+    zone = ctl.zones[0]
+    assert zone.online, "one missed read keeps the speaker's last state"
+    assert zone.transport_state == "PLAYING", "and keeps the values themselves"
+
+    for _ in range(base.GRACE_ATTEMPTS):
+        ctl._poll_all()
+    zone = ctl.zones[0]
+    assert not zone.online
+    assert sonos.offline_status(zone) == "unreachable — No route to host"
+
+    # The same object accumulated the failures, rather than a fresh one per poll.
+    assert ctl._reach["10.0.0.3"] is zone.reach
+
+
+def test_sonos_a_persistently_failing_volume_read_still_gives_up():
+    """volume/mute are live SoCo calls too, made after everything else in the
+    read succeeds. Regression: `reach.succeeded()` used to run before them, so
+    a speaker that always answers transport/track/queue but never volume kept
+    resetting its own grace counter every poll and stayed "online" forever."""
+    ctl = sonos.SonosController()
+
+    class FlakyVolumeSpeaker:
+        ip_address = "10.0.0.4"
+        mute = False
+        group = None
+
+        def get_current_transport_info(self):
+            return {"current_transport_state": "PLAYING"}
+
+        def get_current_track_info(self):
+            return {}
+
+        def get_queue(self):
+            return []
+
+        @property
+        def volume(self):
+            raise OSError("No route to host")
+
+    dev = FlakyVolumeSpeaker()
+    ctl._devices = [dev]
+    for _ in range(base.GRACE_ATTEMPTS):
+        ctl._poll_all()
+    zone = ctl.zones[0]
+    assert not zone.online
+    assert sonos.offline_status(zone) == "no route to host"
+
+
+def test_midea_offline_unit_row_matches_the_card():
+    """The collapsed row and the expanded card header say the same thing about a
+    unit we can't see — the card's version was the honest one."""
+    sysm = midea.MideaSystem()
+    u = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room")  # never reached
+    collapsed = _row_text(sysm._unit_row(u, 78))
+    assert collapsed == "● ????  Living Room (connecting...)"
+    assert _row_text(sysm._header_row(u, False, 78)) == "  " + collapsed  # + cursor gutter
+    assert all(s.dim for s in sysm._unit_row(u, 78))
+
+    # Grace spent without ever reaching it: the row stops saying "connecting"
+    # and names the reason instead.
+    for _ in range(base.GRACE_ATTEMPTS):
+        u.reach.failed("No Midea units responded on the LAN")
+    assert "(no Midea units responded on the LAN)" in _row_text(sysm._unit_row(u, 78))
+
+    # Contacted once, then lost: dimmed values are stale, not absent.
+    seen = midea.MideaUnit(id=1, ip="10.0.0.9", name="Living Room", reach=midea._lost())
+    assert "(unreachable)" in _row_text(sysm._unit_row(seen, 78))
 
 
 def test_fully_grouped():
@@ -174,6 +453,7 @@ def test_fully_grouped():
 def test_collapsed_height_dynamic():
     s = sonos.SonosSystem()
     s.ctl._pinned = []  # ignore any ambient config so the no-pins case is deterministic
+    s.ctl.zones = []    # ...including the placeholders that config would have seeded
     # No state yet: 1 row while discovering, one row per pinned speaker otherwise.
     assert s.collapsed_height == 1
     s.ctl._pinned = sonos._parse_speakers([{"ip": "1.1.1.1"}, {"ip": "1.1.1.2"}])

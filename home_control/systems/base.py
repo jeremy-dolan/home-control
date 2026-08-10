@@ -13,16 +13,134 @@ The shell never reaches into device internals — it only calls these methods.
 
 from __future__ import annotations
 
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Any
 
 from ..ui import Line, Region
 
 # How long a transient action-confirmation message stays on the status line.
 STATUS_TTL = 4.0
+
+# ---------------------------------------------------------------------------
+# Reachability — is the device answering, and what do we say while it isn't
+# ---------------------------------------------------------------------------
+
+# Consecutive failed attempts tolerated before a panel says why. Every panel
+# retries forever; this is the only knob that says how long it stays quiet
+# about it. Three attempts covers a Roku waking from standby or a speaker
+# dropping a request, without hiding a real failure indefinitely.
+GRACE_ATTEMPTS = 3
+
+# Device libraries report failures with the whole request URL, which can embed
+# a token or an API username, and is far wider than a panel line. Keep the host.
+_URL_RE = re.compile(r"https?://([^\s/]+)\S*")
+# ...usually wrapped in framing the panel already supplies, since it names the
+# device itself, plus an error code that says less than the sentence after it.
+_REQUEST_RE = re.compile(r"^(?:GET|PUT|POST|DELETE) Request to \S+ (?:failed: )?")
+_CODE_RE = re.compile(r"^(?:Error -?\d+:|\[Errno \d+\])\s*")
+# urllib hands back the real errno inside "<urlopen error ...>". Keep the inside.
+_WRAPPED_RE = re.compile(r"<urlopen error ([^>]*)>")
+# When a stack of libraries has wrapped the failure — urllib3's
+# HTTPConnectionPool(...) round a NewConnectionError round the real cause — the
+# errno clause is the one sentence a person wants, wherever it ended up.
+_ERRNO_TAIL_RE = re.compile(r"\[Errno \d+\] ([^'\")>]+)")
+
+
+def scrub_error(msg: str) -> str:
+    """Trim a library error down to the part worth putting on one line.
+
+    ``Error -1: GET Request to http://10.0.0.2/api/<secret>/lights/ failed:
+    [Errno 113] No route to host`` → ``No route to host``
+    """
+    msg = str(msg).strip()
+    errno = _ERRNO_TAIL_RE.search(msg)
+    if errno:
+        return errno.group(1).strip()
+    msg = _WRAPPED_RE.sub(r"\1", msg).strip()
+    msg = _URL_RE.sub(r"\1", msg).strip()
+    msg = _CODE_RE.sub("", msg).strip()
+    msg = _REQUEST_RE.sub("", msg).strip()
+    return _CODE_RE.sub("", msg).strip()
+
+
+def in_parens(msg: str) -> str:
+    """A reachability message reflowed to sit in parentheses after a device's
+    name. Lowercases an ordinary opening word, but leaves an acronym alone —
+    "HTTPConnectionPool" must not become "hTTPConnectionPool"."""
+    if len(msg) > 1 and msg[1].isupper():
+        return msg
+    return msg[:1].lower() + msg[1:]
+
+
+class ReachState(Enum):
+    """Compared only -- `Reachability.message` is the user-facing text."""
+    LIVE = auto()          # last attempt landed
+    CONNECTING = auto()    # never reached it, still within grace
+    FAILED = auto()        # never reached it, and now we know why
+    RECONNECTING = auto()  # had it, missing a beat — last values still stand
+    UNREACHABLE = auto()   # had it, lost it past grace
+
+
+@dataclass
+class Reachability:
+    """Whether a device is answering, and what to say while it isn't.
+
+    Every panel retries forever; the only question is how much silence to
+    tolerate before saying why. That tolerance is this one number, `grace`.
+
+    Hold one per thing that can independently be reachable: a bridge, a TV, each
+    speaker, each AC unit. Poll code calls `succeeded()` / `failed(reason)`;
+    render code reads `state`, `message` and `has_values`.
+    """
+
+    grace: int = GRACE_ATTEMPTS
+    fails: int = 0
+    ever: bool = False   # a real read has landed at least once
+    reason: str = ""     # why the last attempt failed, already scrubbed
+
+    def succeeded(self) -> None:
+        self.fails = 0
+        self.ever = True
+        self.reason = ""
+
+    def failed(self, reason: str = "") -> None:
+        self.fails += 1
+        if reason:
+            self.reason = scrub_error(reason)
+
+    @property
+    def state(self) -> ReachState:
+        if self.fails == 0:
+            return ReachState.LIVE if self.ever else ReachState.CONNECTING
+        if not self.ever:
+            return ReachState.CONNECTING if self.fails < self.grace else ReachState.FAILED
+        return ReachState.RECONNECTING if self.fails < self.grace else ReachState.UNREACHABLE
+
+    @property
+    def has_values(self) -> bool:
+        """True when cached device state is worth drawing. A missed beat inside
+        grace keeps the last reading on screen; past grace it is no longer
+        something we can claim, and never-reached means there is nothing to draw."""
+        return self.state in (ReachState.LIVE, ReachState.RECONNECTING)
+
+    @property
+    def message(self) -> str:
+        """One line for the panel: '' while live, else why there's nothing."""
+        state = self.state
+        if state == ReachState.LIVE:
+            return ""
+        if state == ReachState.CONNECTING:
+            return "Connecting..."
+        if state == ReachState.RECONNECTING:
+            return "Reconnecting..."
+        if state == ReachState.FAILED:
+            return self.reason or "unreachable"
+        return f"unreachable — {self.reason}" if self.reason else "unreachable"
 
 
 @dataclass

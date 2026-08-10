@@ -38,7 +38,7 @@ from ..ui import (
     pad_between,
     rgb_color,
 )
-from .base import System, VoiceAction
+from .base import Reachability, ReachState, System, VoiceAction
 
 BRIDGE_IP = "192.168.1.99"
 CONNECT_TIMEOUT = 4  # seconds; phue's default 10 hangs the UI when unreachable
@@ -238,10 +238,19 @@ def light_color(ls: Light) -> tuple[tuple[int, int, int], str] | None:
 
 class HueController:
     def __init__(self, ip: str | None = None):
-        self.ip = ip or config.get("hue", "bridge_ip", BRIDGE_IP)
+        configured = config.get("hue", "bridge_ip")
+        self.ip = ip or configured or BRIDGE_IP
+        # Whether `ip` came from the user (an override or config.toml) or is
+        # just the hardcoded fallback -- shown while connecting so a wrong
+        # address reads as "you set this" vs. "this is a guess."
+        self.ip_configured = bool(ip or configured)
         self._bridge = None
         self._lock = threading.Lock()
-        self.connected = False
+        self.reach = Reachability()
+        # Last command/handshake failure. Distinct from `reach`, which tracks
+        # whether the bridge is answering at all: a rejected set_light says
+        # nothing about reachability, and _connect's link-button prompt is
+        # advice rather than a fault.
         self.error = ""
         self.rooms: list[Room] = []
         self.lights: dict[int, Light] = {}
@@ -251,22 +260,39 @@ class HueController:
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
         self._mock_now: datetime | None = None  # set by push_time() under mock
 
+    @property
+    def connected(self) -> bool:
+        """Whether the bridge's cached state is worth drawing or commanding.
+        Reads through to `reach`, so rendering and commands can't disagree."""
+        return self.reach.has_values
+
     # -- connection / polling (background thread) --------------------------
     def poll(self) -> None:
         if self.mock:
             self._load_mock()
             return
-        if not self.connected and not self._connect():
+        if self._bridge is None and not self._connect():
+            self.reach.failed(self.error)
             return
         try:
             rooms, lights = self._fetch_state()
-            with self._lock:
-                self.rooms, self.lights = rooms, lights
         except Exception as e:  # noqa: BLE001 — surface any bridge/network failure
-            self.connected = False
-            self.error = str(e)
+            # Drop the handle so the next poll rebuilds it. `reach` decides how
+            # long we stay on "Connecting..." before naming the failure.
+            self._bridge = None
+            self.reach.failed(str(e))
+            return
+        with self._lock:
+            self.rooms, self.lights = rooms, lights
+        self.reach.succeeded()
 
     def _connect(self) -> bool:
+        """Build the phue handle. Returns True when we *have* a handle — which
+        proves nothing about the bridge being reachable: once a username is
+        cached in ~/.python_hue, `Bridge()` does no network I/O at all, so it
+        succeeds instantly on a foreign network. Only `poll()` may set
+        `connected`, and only after a state fetch actually returns.
+        """
         try:
             from phue import Bridge  # imported lazily so the app runs without phue
             from phue.exceptions import PhueRegistrationException
@@ -277,8 +303,6 @@ class HueController:
             # Short timeout so an unreachable bridge fails fast instead of
             # hanging the poll thread (and any command) for phue's 10s default.
             self._bridge = Bridge(self.ip, timeout=CONNECT_TIMEOUT)
-            self.connected = True
-            self.error = ""
             return True
         except PhueRegistrationException:
             self.error = "Press the bridge link button, then wait..."
@@ -290,10 +314,13 @@ class HueController:
     def _fetch_state(self) -> tuple[list[Room], dict[int, Light]]:
         b = self._bridge
         assert b is not None
-        if not self.info.model:  # static — fetch once
-            self._fetch_config()
         raw_lights = b.request("GET", f"/api/{b.username}/lights/")
         raw_groups = b.request("GET", f"/api/{b.username}/groups/")
+        # After the live requests, not before: /config is best-effort (it swallows
+        # its own errors), so fetching it first would just burn a second timeout
+        # on every poll against an unreachable bridge.
+        if not self.info.model:  # static — fetch once
+            self._fetch_config()
 
         lights: dict[int, Light] = {}
         for lid_str, ld in raw_lights.items():
@@ -796,7 +823,7 @@ class HueController:
     def _load_mock(self) -> None:
         if self.lights:
             return  # load once
-        self.connected = True
+        self.reach.succeeded()
         spec = [
             ("Living room", [("Living room Credenza", True, 254), ("Living room Window", True, 254),
                              ("Living room 1", True, 70), ("Living room 2", True, 70),
@@ -907,9 +934,13 @@ class HueSystem(System):
 
     # -- collapsed ---------------------------------------------------------
     def collapsed_lines(self, width: int) -> list[Line]:
-        if not self.ctl.connected:
-            msg = self.ctl.error or "connecting..."
-            return [[Seg(f"{self.ctl.ip}: {msg}", dim=True)]]
+        reach = self.ctl.reach
+        if not reach.has_values:
+            # The IP earns its place only alongside a failure, naming what failed;
+            # before that it's noise, and Roku/Sonos say a bare "Connecting..." too.
+            msg = reach.message
+            prefix = f"{self.ctl.ip}: " if reach.state != ReachState.CONNECTING else ""
+            return [[Seg(prefix + msg, dim=True)]]
         # Badge mirrors the Router's "● ONLINE": accent colour, bold, on the left.
         badge = "● CONNECTED"
         inventory, on_count = self.ctl.summary
@@ -934,12 +965,18 @@ class HueSystem(System):
             self._render_sysinfo(region)
             return
         rooms, lights = self.ctl.snapshot()
-        if not self.ctl.connected:
-            if self.ctl.error:
-                region.text(0, 0, f"Bridge unreachable ({self.ctl.ip})", "fault", bold=True)
-                region.text_wrapped(1, 0, self.ctl.error, dim=True)
+        reach = self.ctl.reach
+        if not reach.has_values:
+            if reach.state == ReachState.CONNECTING:
+                # One line carries it all here -- "Connecting..." plus a
+                # separate IP line said the same thing twice.
+                source = "configured" if self.ctl.ip_configured else "default"
+                region.text(0, 0, f"Connecting to {self.ctl.ip} ({source})", dim=True)
             else:
-                region.text(0, 0, f"Connecting to {self.ctl.ip}...", dim=True)
+                # Line 1 matches what collapsed shows; expanding only adds a
+                # second line, never changes the first.
+                region.segs(0, self.collapsed_lines(region.width)[0])
+                region.text(1, 0, "Bridge unreachable", "fault")
             return
 
         region.segs(0, self.collapsed_lines(region.width)[0])

@@ -24,7 +24,7 @@ import curses
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .. import config
@@ -45,7 +45,7 @@ from ..ui import (
     select_row,
     toggle_dot,
 )
-from .base import Popup, System
+from .base import Popup, Reachability, System, in_parens
 
 # SoCo's default REQUEST_TIMEOUT is 20s. On a healthy LAN a speaker answers in
 # milliseconds, but when a speaker responds to SSDP discovery yet its control
@@ -81,6 +81,16 @@ class ZoneState:
     shuffle: bool = False
     repeat: bool = False
     cross_fade: bool = False
+    # Every field above defaults to something a real speaker could report, so a
+    # zone we failed to read is indistinguishable from a stopped one at volume 0
+    # unless it says so. Each speaker is independently reachable, so each gets
+    # its own grace: one dropped request keeps its last reading, a silent
+    # speaker eventually says why. Default: assume nothing until a read lands.
+    reach: Reachability = field(default_factory=Reachability)
+
+    @property
+    def online(self) -> bool:
+        return self.reach.has_values
 
 
 @dataclass
@@ -137,6 +147,24 @@ def badge(transport_state: str) -> tuple[str, str]:
 # Width of the widest badge label ("▶ PLAYING" / "■ STOPPED" / "⟳ LOADING"),
 # so the state column lines up across the independent per-speaker rows.
 BADGE_W = max(len(text) for text, _ in _BADGES.values())
+
+# Not a transport state — what we show instead of one for a speaker we haven't
+# read, where even "STOPPED" would be a claim about state we don't have.
+UNKNOWN_BADGE = "● ????"
+
+
+def offline_status(zone: ZoneState) -> str:
+    """Why a zone has no state — the shared reachability wording, set to sit in
+    parentheses after the speaker's name."""
+    return in_parens(zone.reach.message)
+
+
+def _live() -> Reachability:
+    """A reachability that has already answered — for fixtures, which stand in
+    for speakers that replied rather than ones we're still reaching for."""
+    r = Reachability()
+    r.succeeded()
+    return r
 
 
 def _fully_grouped(zones: list[ZoneState]) -> bool:
@@ -226,12 +254,26 @@ class SonosController:
         self.queue_items: list[QueueItem] = []
         self.favorites: list[FavoriteItem] = []
         self.mock = os.environ.get("HOME_CONTROL_MOCK") == "1"
+        # One reachability per speaker, keyed by IP and kept across polls: they
+        # fail independently, and grace has to accumulate somewhere.
+        self._reach: dict[str, Reachability] = {}
         # Pinned speakers (ip, name_override) skip SSDP; empty → auto-discover.
         self._pinned = _parse_speakers(config.get("sonos", "speakers", []))
         self._name_overrides = {ip: name for ip, name in self._pinned if name}
         # Household speakers seen in topology but absent from the pinned list.
         self._new_devices: list[str] = []
         self._fast_tick = 0
+        if not self.mock and self._pinned:
+            # Pinned speakers render as placeholder rows from the very first
+            # frame, rather than a bare "Connecting..." while the first
+            # poll's network calls are still in flight — same trick as the
+            # Midea AC panel's placeholder cards. Each shares the
+            # Reachability `_reach_for` will hand back once polling starts,
+            # so grace accumulates instead of resetting.
+            self.zones = [
+                ZoneState(name=name or ip, reach=self._reach.setdefault(ip, Reachability()))
+                for ip, name in self._pinned
+            ]
 
     # -- polling (background thread) ---------------------------------------
     def poll(self, focused: bool) -> None:
@@ -323,14 +365,19 @@ class SonosController:
 
     def _display_name(self, device) -> str:
         """The name to show for a device: the config override if pinned with one,
-        else the speaker's own Sonos room name (never raises)."""
+        else the speaker's own Sonos room name (never raises).
+
+        Asking the speaker its name is itself a request, so an unreachable one
+        falls back to its IP — which at least identifies which speaker is
+        missing, where "Unknown" identifies nothing.
+        """
         ip = getattr(device, "ip_address", "")
         if ip in self._name_overrides:
             return self._name_overrides[ip]
         try:
             return device.player_name
         except Exception:  # noqa: BLE001
-            return "Unknown"
+            return ip or "Unknown"
 
     # -- pinning / new-device accessors ------------------------------------
     def pinned_count(self) -> int:
@@ -351,13 +398,9 @@ class SonosController:
         return sorted(devices, key=lambda d: d.player_name)
 
     def _coordinator(self, device):
-        try:
-            group = device.group
-            if group:
-                return group.coordinator
-        except Exception:  # noqa: BLE001
-            pass
-        return device
+        """Return the group coordinator, or the device when ungrouped."""
+        group = device.group
+        return group.coordinator if group else device
 
     def _poll_all(self) -> None:
         zones = [self._read_zone(d) for d in self._devices]
@@ -366,7 +409,13 @@ class SonosController:
             if self.active_idx >= len(zones):
                 self.active_idx = 0
 
+    def _reach_for(self, device) -> Reachability:
+        """This speaker's reachability, kept across polls — a fresh one every
+        poll would reset the grace counter and never reach a verdict."""
+        return self._reach.setdefault(getattr(device, "ip_address", ""), Reachability())
+
     def _read_zone(self, device) -> ZoneState:
+        reach = self._reach_for(device)
         try:
             coord = self._coordinator(device)
             transport = coord.get_current_transport_info()
@@ -395,15 +444,35 @@ class SonosController:
                 shuffle, repeat, cross_fade = coord.shuffle, coord.repeat, coord.cross_fade
             except Exception:  # noqa: BLE001
                 shuffle = repeat = cross_fade = False
+            # Read the remaining fields before declaring success -- volume and
+            # mute are live SoCo calls too, and succeeding early would let a
+            # persistent failure here reset `fails` to 0 every poll, never
+            # reaching grace.
+            name = self._display_name(device)
+            volume, muted = device.volume, device.mute
+            reach.succeeded()
             return ZoneState(
-                name=self._display_name(device),
+                name=name,
                 transport_state=transport.get("current_transport_state", "STOPPED"),
-                volume=device.volume, muted=device.mute,
+                volume=volume, muted=muted,
                 grouped=grouped, queue_size=queue_size, track=track,
                 shuffle=shuffle, repeat=repeat, cross_fade=cross_fade,
+                reach=reach,
             )
-        except Exception:  # noqa: BLE001
-            return ZoneState(name=self._display_name(device))
+        except Exception as e:  # noqa: BLE001
+            # No reading at all — every field would be a default, so the zone
+            # carries only its name and why there's nothing behind it. Inside
+            # grace the previous zone's values stand, so hand those back.
+            reach.failed(str(e))
+            prev = next((z for z in self.zones if z.reach is reach), None)
+            if reach.has_values and prev is not None:
+                return prev
+            # It just failed to answer -- asking it for its own name would
+            # only be a second timeout for the same reason. Reuse what we
+            # already know instead of touching the network again.
+            ip = getattr(device, "ip_address", "")
+            name = (prev.name if prev else None) or self._name_overrides.get(ip) or ip or "Unknown"
+            return ZoneState(name=name, reach=reach)
 
     def _poll_active_fast(self) -> None:
         """Light refresh of just the active zone's transport + track."""
@@ -822,8 +891,10 @@ class SonosController:
         with self._lock:
             self.discovered = True
             self.zones = [
-                ZoneState("Living Room", "PLAYING", 38, False, True, 12, track),
-                ZoneState("Kitchen", "PLAYING", 25, False, True, 12, track),
+                ZoneState("Living Room", "PLAYING", 38, False, True, 12, track,
+                          reach=_live()),
+                ZoneState("Kitchen", "PLAYING", 25, False, True, 12, track,
+                          reach=_live()),
             ]
         self.queue_items = [
             QueueItem(0, "Autumn Leaves", "Cannonball Adderley"),
@@ -877,13 +948,24 @@ class SonosSystem(System):
             return 2
         return len(zones)
 
+    def _waiting_message(self) -> str:
+        """What the panel says before any speaker state has landed.
+
+        Pinned speakers never reach SSDP — `_discover` hands straight off to
+        their configured IPs — so only the unpinned case is really discovery.
+        Both views ask this, so neither can end up describing the other's case.
+        """
+        if self.ctl.error:
+            return self.ctl.error
+        return "Connecting..." if self.ctl.pinned_count() else "Discovering speakers..."
+
     def collapsed_lines(self, width: int) -> list[Line]:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
             pinned = self.ctl.pinned_count()
-            msg = self.ctl.error or ("Connecting..." if pinned else "Discovering...")
             # Pad to the pinned row count so the panel doesn't resize once speakers populate.
-            return [[Seg(msg, dim=True)]] + [[Seg("")] for _ in range(max(0, pinned - 1))]
+            return ([[Seg(self._waiting_message(), dim=True)]]
+                    + [[Seg("")] for _ in range(max(0, pinned - 1))])
         if _fully_grouped(zones):
             return self._grouped_lines(zones, active_idx, width)
         # Ungrouped: one independent row per speaker (like the Midea AC panel).
@@ -913,6 +995,11 @@ class SonosSystem(System):
     def _independent_row(self, zone: ZoneState, width: int) -> Line:
         """One speaker's status on a single line: state badge, name, now-playing,
         and a right-aligned volume. Song + volume dim when it isn't playing."""
+        if not zone.online:
+            # Nothing here is a reading, so nothing here is bright: no transport
+            # badge, no "vol 0" for a volume we never asked about.
+            return [Seg(f"{UNKNOWN_BADGE:<{BADGE_W}}", dim=True), Seg("  ", dim=True),
+                    Seg(f"{zone.name} ({offline_status(zone)})", dim=True)]
         label, state = badge(zone.transport_state)
         color = badge_color(state, self.color)
         playing = zone.transport_state == "PLAYING"
@@ -948,7 +1035,7 @@ class SonosSystem(System):
     def _render_main(self, region: Region) -> None:
         zones, active_idx = self.ctl.snapshot()
         if not zones:
-            region.text_wrapped(0, 0, self.ctl.error or "Discovering speakers...", dim=True)
+            region.text_wrapped(0, 0, self._waiting_message(), dim=True)
             return
 
         y = 0
@@ -1030,6 +1117,13 @@ class SonosSystem(System):
             region.text(row, 20, trunc(txt, region.width - 20), bold=sel)
 
     def _zone_row(self, zone: ZoneState, active: bool, width: int) -> Line:
+        if not zone.online:
+            # Same columns as a live row so the list still lines up, but the
+            # badge says "????" and the volume bar is gone rather than drawn at 0.
+            return [cursor(self.color, active),
+                    Seg(f"{zone.name:<16}  ", dim=True),
+                    Seg(f"{UNKNOWN_BADGE:<10}", dim=True),
+                    Seg(f"  ({offline_status(zone)})", dim=True)]
         label, state = badge(zone.transport_state)
         color = badge_color(state, self.color)
         mute = "M" if zone.muted else " "

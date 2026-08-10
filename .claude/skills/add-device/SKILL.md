@@ -30,7 +30,10 @@ the `System` contract described there.
    - *Controller*: use short network timeouts, so an unreachable device can't
      freeze the UI; gate command methods on being connected; and never print to
      stdout/stderr (the file-only logger exists for this reason — a stray print
-     corrupts the curses screen).
+     corrupts the curses screen). Track connectivity with a `base.Reachability`
+     per independently-reachable thing — call `succeeded()` / `failed(reason)`
+     from poll code — rather than a bespoke connected/online flag; see its
+     docstring for the state machine.
    - *Panel*: the full surface is `collapsed_lines(width)`,
      `render_expanded(region)`, `handle_key(key)`, `help_notes()`,
      `toolbar_line()`, plus `captures_text()` if it has a text-entry mode.
