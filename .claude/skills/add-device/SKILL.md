@@ -45,8 +45,8 @@ described there.
    step 2 show them in practice.
 
 5. **Wire config**: add a `[<device>]` section read via `config.py`,
-   auto-detecting when unset. Mind the template byte-identity rule under Config
-   in `ARCHITECTURE.md`.
+   auto-detecting when unset, and document it in the template,
+   `home_control/config.example.toml`.
 
 6. **Register it**: add `<Device>System` to `_DEFAULT_ORDER` in
    `home_control/systems/__init__.py`.

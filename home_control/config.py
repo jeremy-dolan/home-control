@@ -13,6 +13,7 @@ import stat
 import threading
 import tomllib
 import warnings
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -20,64 +21,12 @@ CONFIG_PATH = Path(
     os.environ.get("HOME_CONTROL_CONFIG", Path.home() / ".config" / "home-control" / "config.toml")
 )
 
-_DEFAULT_TEMPLATE = """\
-# home-control configuration
+TEMPLATE_NAME = "config.example.toml"
 
-[voice]
-# Voice control sends the transcript to the Claude API
-# api_key = "sk-ant-..."      # or set ANTHROPIC_API_KEY in the environment
-# model = "claude-haiku-4-5"  # low-latency model for snappy commands
 
-[hue]
-# IP address of the Philips Hue bridge.
-bridge_ip = "192.168.1.99"
-
-[roku]
-# App will auto-discover Roku devices and connect to the first one found.
-# Setting an IP skips the ~3s SSDP sweep on startup and connects instantly.
-# ip = "192.168.1.80"
-
-[sonos]
-# Pin speakers by IP to skip SSDP discovery and connect instantly (discovery
-# otherwise adds a ~2s sweep at startup). The list order is the display order,
-# top to bottom. An optional "name" overrides the speaker's own Sonos room
-# name. If any speakers are pinned and more are found on the network, a popup
-# lists the unpinned ones so you can add them. Leave unset to auto-discover
-# every speaker on the LAN (listed alphabetically).
-# speakers = [
-#   { ip = "192.168.1.60" },
-#   { ip = "192.168.1.61", name = "Kitchen" },
-# ]
-
-[router]
-# Router status via UPnP IGD (auto-discovered over SSDP) — all optional.
-# router_ip = "192.168.1.1"     # restrict discovery to this gateway
-# igd_url = "http://192.168.1.1:40701/rootDesc.xml"  # skip SSDP, use this descriptor
-# probe_host = "1.1.1.1"        # public host for the latency/loss connectivity check
-# password = "admin-password"   # enables the authenticated device list (Verizon Fios)
-
-[midea]
-# Pin specific units by IP: they show in the panel immediately and, once
-# paired, connect with no discovery round at all (broadcast discovery blocks
-# ~5s). Each entry's "name" overrides the unit's own reported firmware name
-# (e.g. "net_ac_16A4"). Leave unset to auto-discover all reachable units.
-# units = [
-#   { ip = "192.168.1.50", name = "Living Room" },
-# ]
-#
-# V3 units need a one-time cloud pairing to fetch a token/key (cached locally
-# afterward, see ~/.cache/home-control/midea_tokens.json). Set your Midea
-# account (the units must already be added to it in whichever app you use):
-# account = "you@example.com"
-# password = "your-account-password"
-#
-# Which app/cloud your account belongs to (they're separate backends even
-# though they control the same physical protocol):
-#   "nethome_plus" (default) — the "NetHome Plus" app
-#   "smarthome"              — the "SmartHome"/MSmartHome app (what Midea is
-#                              migrating users to)
-# cloud = "smarthome"
-"""
+def template_text() -> str:
+    """The commented template a missing config is created from."""
+    return files(__package__).joinpath(TEMPLATE_NAME).read_text(encoding="utf-8")
 
 _lock = threading.Lock()
 _cache: dict[str, Any] | None = None
@@ -134,7 +83,7 @@ def _load() -> dict[str, Any]:
             return _cache
         if not CONFIG_PATH.exists():
             try:
-                write_private_text(CONFIG_PATH, _DEFAULT_TEMPLATE)
+                write_private_text(CONFIG_PATH, template_text())
             except OSError:
                 pass
         else:

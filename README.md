@@ -76,7 +76,8 @@ git pull
 
 ### Config
 
-The first run writes a commented config template to
+The first run writes a commented
+[config template](home_control/config.example.toml) to
 `~/.config/home-control/config.toml`. Most supported devices need no config:
 the router, Roku, Sonos speakers and Midea units are discovered on the LAN at
 startup, and their config entries mostly pin IPs to skip discovery and start
