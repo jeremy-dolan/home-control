@@ -60,22 +60,28 @@ python3 -m venv .venv
 ln -s "$PWD/.venv/bin/home-control" ~/.local/bin/  # or somewhere in your $PATH
 ```
 
-### Demo
-
-Demo mode, using canned device data (no hardware access):
+Then:
 
 ```bash
+# demo mode, using canned device data (no hardware access):
 ANTHROPIC_API_KEY="" HOME_CONTROL_MOCK=1 home-control
+
+# real use:
+home-control
+
+# update, inside your home-control directory:
+git pull
+.venv/bin/pip install -e .  # picks up any dependency changes
 ```
 
-### Real use
+### Config
 
-Run `home-control`. The first run writes a commented config template
-to `~/.config/home-control/config.toml` (override with `$HOME_CONTROL_CONFIG`).
-Most devices need no config: the router, Roku, Sonos speakers and Midea units
-are discovered on the LAN at startup, and their config entries mostly pin IPs
-to skip discovery and start faster. Discovered devices are never written back
-to the config. What does need setting:
+The first run writes a commented config template to
+`~/.config/home-control/config.toml`. Most supported devices need no config:
+the router, Roku, Sonos speakers and Midea units are discovered on the LAN at
+startup, and their config entries mostly pin IPs to skip discovery and start
+faster (discovered devices are not written to the config currently). What does
+need setting:
 
 - **Hue** isn't discovered: set `[hue] bridge_ip` (the template's
   `192.168.1.99` is a placeholder). Press the bridge's link button when the
@@ -87,8 +93,6 @@ to the config. What does need setting:
   `ANTHROPIC_API_KEY` or `[voice] api_key`.
 
 Per-device details are under Device support below.
-
-To update, `git pull` in the clone.
 
 ### Development
 
