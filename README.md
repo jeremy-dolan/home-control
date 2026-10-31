@@ -176,9 +176,10 @@ parsing pushed state updates, so the cards reflect live state with no polling
 lag. Units are auto-discovered by LAN broadcast.
 
 `i` opens device info for the selected unit: every attribute and capability the
-protocol exposes, including fields the panel never renders (humidity, energy
-counters, runtime totals). The regular poll asks only for live status, so
-pressing `i` is what queries the unit for the rest.
+protocol exposes, including the fields the panel never renders (humidity,
+energy counters, runtime totals). The regular poll asks only for live status,
+so pressing `i` is what queries the unit for the rest; values fill in as replies
+land.
 
 Config `[midea]`: `units` pins units by IP, allowing us to skip the
 broadcast-discovery scan and display the devices instantly. Also allows

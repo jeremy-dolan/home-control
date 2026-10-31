@@ -1273,12 +1273,12 @@ class SonosSystem(System):
             "integration, and EQ editing aren't ported yet.)",
             "Config: [sonos] speakers pins speakers by IP — each entry is "
             "{ ip = \"...\", name = \"...\" } — to skip the ~2s SSDP discovery "
-            "and connect instantly; the list order is the display order and the "
-            "optional name overrides the speaker's own room name. If additional "
-            "speakers are broadcast within the same system as the pinned "
-            "speakers, a popup will alert the user about additional devices "
-            "being available. If nothing is pinned in the config, speakers are "
-            "auto-discovered and listed alphabetically.",
+            "and connect instantly. The list order is the display order, top to "
+            "bottom, and the optional name overrides the speaker's own room "
+            "name. If additional speakers are broadcast within the same system "
+            "as the pinned speakers, a popup will alert the user about "
+            "additional devices being available. If nothing is pinned in the "
+            "config, speakers are auto-discovered and listed alphabetically.",
         ]
 
     # -- modal alerts ------------------------------------------------------
