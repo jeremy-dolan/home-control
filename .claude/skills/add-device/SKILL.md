@@ -5,8 +5,8 @@ description: Add a new device integration to home-control, or repoint an existin
 
 # Adding support for a new device
 
-Work in a worktree. Read alongside `ARCHITECTURE.md` — this recipe assumes
-the `System` contract described there.
+Read alongside `ARCHITECTURE.md` — this recipe assumes the `System` contract
+described there.
 
 1. **Research the library first — don't just grab the first hit.** Find the
    best-fit Python library for *local-LAN* control of the target hardware; a
@@ -16,9 +16,8 @@ the `System` contract described there.
    confirmed support for the user's specific model/firmware. Check PyPI and
    the project's open issues, and web-search for alternatives and known
    pitfalls before committing to one. Prefer stdlib + one focused library
-   over a heavy framework. If a `standalone-apps/` prototype already drives
-   this device, mine it for a known-good approach. Surface the shortlist and
-   your pick (with the trade-off) to the user before building on it.
+   over a heavy framework. Surface the shortlist and your pick (with the
+   trade-off) to the user before building on it.
 
 2. **Read two existing panels as templates.** `systems/hue.py` and
    `systems/sonos.py` are the reference implementations of the `System`
