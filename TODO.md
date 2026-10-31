@@ -6,15 +6,6 @@ Known follow-up work.
 
 Stop isn't currently available and the status bar is a mess
 
-## Security
-
-Midea token/key material is written to a JSON cache without explicitly setting
-restrictive permissions, and the main config may hold plaintext router, Midea,
-and Anthropic credentials. On a normal modern macOS setup the parent
-directories are usually user-private, but the code should enforce 0600 itself.
-
-see also: https://chatgpt.com/c/6a56a686-1e48-83ea-8eff-301762040029
-
 ## Roku badge work
 
 Done: badge labels pad to `BADGE_W` and both the collapsed line and the

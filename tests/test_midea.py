@@ -1,6 +1,8 @@
 """Headless tests for the Midea AC panel (no curses init, no real network/asyncio)."""
 
 import curses
+import os
+import stat
 
 import pytest
 
@@ -110,8 +112,23 @@ def test_editable_field_defaults():
 
 def test_token_cache_roundtrip(tmp_path):
     path = tmp_path / "midea_tokens.json"
-    midea._save_token_cache({"1": {"token": "aa", "key": "bb"}}, path)
+    old_umask = os.umask(0)
+    try:
+        midea._save_token_cache({"1": {"token": "aa", "key": "bb"}}, path)
+    finally:
+        os.umask(old_umask)
     assert midea._load_token_cache(path) == {"1": {"token": "aa", "key": "bb"}}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_token_cache_load_warns_without_changing_permissions(tmp_path):
+    path = tmp_path / "midea_tokens.json"
+    path.write_text('{"1": {"token": "aa", "key": "bb"}}')
+    path.chmod(0o666)
+
+    with pytest.warns(RuntimeWarning, match="insecure permissions 0666"):
+        assert midea._load_token_cache(path) == {"1": {"token": "aa", "key": "bb"}}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o666
 
 
 def test_token_cache_missing_file_is_empty(tmp_path):

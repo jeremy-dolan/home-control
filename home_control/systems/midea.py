@@ -389,6 +389,8 @@ def _info_names(label: str, names: list[str], width: int) -> list[str]:
 
 def _load_token_cache(path: Path = TOKEN_CACHE_PATH) -> dict[str, dict[str, Any]]:
     try:
+        if path.exists():
+            config.prepare_private_file(path)
         return json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
@@ -396,8 +398,7 @@ def _load_token_cache(path: Path = TOKEN_CACHE_PATH) -> dict[str, dict[str, Any]
 
 def _save_token_cache(cache: dict[str, dict[str, Any]], path: Path = TOKEN_CACHE_PATH) -> None:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cache))
+        config.write_private_text(path, json.dumps(cache))
     except OSError:
         pass
 

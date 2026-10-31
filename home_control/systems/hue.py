@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import colorsys
 import curses
+import json
 import math
 import os
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -42,6 +44,7 @@ from .base import Reachability, ReachState, System, VoiceAction
 
 BRIDGE_IP = "192.168.1.99"
 CONNECT_TIMEOUT = 4  # seconds; phue's default 10 hangs the UI when unreachable
+HUE_CONFIG_PATH = Path.home() / ".python_hue"
 CLOCK_DRIFT_WARN = 60  # seconds of bridge/system clock disagreement before flagging it
 
 # Brightness bar width in cells. The ladder below has one notch per cell so a
@@ -302,7 +305,19 @@ class HueController:
         try:
             # Short timeout so an unreachable bridge fails fast instead of
             # hanging the poll thread (and any command) for phue's 10s default.
-            self._bridge = Bridge(self.ip, timeout=CONNECT_TIMEOUT)
+            first_pairing = not HUE_CONFIG_PATH.exists()
+            if not first_pairing:
+                config.prepare_private_file(HUE_CONFIG_PATH)
+            bridge = Bridge(
+                self.ip, timeout=CONNECT_TIMEOUT, config_file_path=str(HUE_CONFIG_PATH),
+                save_config=not first_pairing,
+            )
+            if first_pairing:
+                config.write_private_text(
+                    HUE_CONFIG_PATH,
+                    json.dumps({self.ip: {"username": bridge.username}}),
+                )
+            self._bridge = bridge
             return True
         except PhueRegistrationException:
             self.error = "Press the bridge link button, then wait..."
