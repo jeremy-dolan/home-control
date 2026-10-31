@@ -1,10 +1,11 @@
 """Headless tests for the shell's modal popup (fake screen, no curses init)."""
 
 import curses
+import stat
 
 import pytest
 
-from home_control import config, ui
+from home_control import app, config, ui
 from home_control.app import Shell
 from home_control.systems.base import Popup, System
 
@@ -68,6 +69,18 @@ def _draw(sh: Shell, alert: _Alert, h: int = 45, w: int = 80) -> list[str]:
 
 def _shown(rows: list[str]) -> list[str]:
     return [r.split("line ")[1][:2] for r in rows if "line " in r]
+
+
+def test_setup_logging_warns_without_changing_permissions(tmp_path, monkeypatch):
+    log = tmp_path / "tui.log"
+    log.write_text("existing log")
+    log.chmod(0o666)
+    monkeypatch.setattr(app, "LOG_PATH", log)
+
+    with pytest.warns(RuntimeWarning, match="insecure permissions 0666"):
+        app._setup_logging()
+
+    assert stat.S_IMODE(log.stat().st_mode) == 0o666
 
 
 def test_short_popup_is_unchanged(shell):

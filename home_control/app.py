@@ -9,7 +9,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from . import layout
+from . import config, layout
 from .poller import Poller
 from .systems import System, build_systems
 from .ui import Line, Region, Seg, attr, backdrop, draw_box, hint, hint_row, init_colors, seg_len
@@ -58,13 +58,13 @@ def _setup_logging() -> None:
     captures errors for debugging.
     """
     try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.prepare_private_file(LOG_PATH)
+        logging.basicConfig(
+            filename=str(LOG_PATH), filemode="a", level=logging.WARNING,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
     except OSError:
         return
-    logging.basicConfig(
-        filename=str(LOG_PATH), filemode="a", level=logging.WARNING,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
     for name in ("phue_modern", "httpx", "httpcore", "soco", "midealocal"):
         logging.getLogger(name).setLevel(logging.ERROR)
 
@@ -369,6 +369,7 @@ def run() -> None:
     # traceback is shown (curses.wrapper has already restored the terminal).
     old_stderr = sys.stderr
     try:
+        config.prepare_private_file(LOG_PATH)
         with open(LOG_PATH, "a") as log:
             sys.stderr = log
             try:

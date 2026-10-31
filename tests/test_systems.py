@@ -1,5 +1,7 @@
 """Headless tests for pure helpers across the system modules (no curses init)."""
 
+import json
+import stat
 import threading
 import xml.etree.ElementTree as ET
 from dataclasses import replace
@@ -36,7 +38,7 @@ def test_brightness_bar_shape():
     assert len(_bar_text(mid)) == hue.BAR_WIDTH and _bar_text(mid).count("◉") == 1
 
 
-def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
+def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch, tmp_path):
     """phue's Bridge() does no network I/O at all once a username is cached in
     ~/.python_hue, so building the handle proves nothing about reachability.
 
@@ -57,8 +59,10 @@ def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
 
         username = "u"
 
-        def __init__(self, ip, timeout=None):
-            pass
+        def __init__(self, ip, timeout=None, config_file_path=None, save_config=True):
+            assert stat.S_IMODE(hue.HUE_CONFIG_PATH.stat().st_mode) == 0o600
+            assert save_config is True
+            self.config_file_path = config_file_path
 
         def request(self, method, path):
             mid_poll.append(ctl.connected)
@@ -71,6 +75,9 @@ def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
                 return {"1": {"type": "Room", "name": "Kitchen", "lights": ["1"]}}
             return {"name": "Bridge", "modelid": "BSB002"}
 
+    monkeypatch.setattr(hue, "HUE_CONFIG_PATH", tmp_path / ".python_hue")
+    hue.HUE_CONFIG_PATH.write_text('{"192.0.2.1": {"username": "u"}}')
+    hue.HUE_CONFIG_PATH.chmod(0o600)
     monkeypatch.setattr(phue, "Bridge", FakeBridge)
 
     ctl.poll()
@@ -96,6 +103,38 @@ def test_hue_stays_disconnected_until_a_fetch_returns(monkeypatch):
     for _ in range(base.GRACE_ATTEMPTS):
         ctl.poll()
     assert ctl.connected is False
+
+
+def test_hue_cache_stays_missing_until_first_pairing_succeeds(monkeypatch, tmp_path):
+    import phue
+    from phue.exceptions import PhueRegistrationException
+
+    path = tmp_path / ".python_hue"
+    monkeypatch.setattr(hue, "HUE_CONFIG_PATH", path)
+    attempts = 0
+
+    class FakeBridge:
+        username = "new-user"
+
+        def __init__(self, ip, timeout=None, config_file_path=None, save_config=True):
+            nonlocal attempts
+            assert config_file_path == str(path)
+            assert save_config is False
+            assert not path.exists()
+            attempts += 1
+            if attempts == 1:
+                raise PhueRegistrationException(101, "link button not pressed")
+
+    monkeypatch.setattr(phue, "Bridge", FakeBridge)
+    ctl = hue.HueController("192.0.2.1")
+
+    assert ctl._connect() is False
+    assert not path.exists()
+    assert ctl.error == "Press the bridge link button, then wait..."
+
+    assert ctl._connect() is True
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text()) == {"192.0.2.1": {"username": "new-user"}}
 
 
 def test_roku_stops_saying_connecting_once_grace_runs_out():

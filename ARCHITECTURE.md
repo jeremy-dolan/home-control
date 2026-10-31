@@ -92,6 +92,10 @@ Real config lives outside the repo at `~/.config/home-control/config.toml`
 (override `$HOME_CONTROL_CONFIG`), auto-created from a template on first run.
 That template is a Python string literal (`_DEFAULT_TEMPLATE` in
 `home_control/config.py`) and must stay byte-identical to `config.example.toml`.
+Credential-bearing files are created with mode no broader than 0600: the main
+config, runtime log, Midea token cache, and phue2's `~/.python_hue` cache.
+Existing files are never chmodded; the app warns and continues if group or
+other permission bits are present.
 
 **Docs sync**: per-device implementation/config blurbs are mirrored in two
 places — `README.md`'s `## Device support` and each system's `help_notes()`

@@ -9,8 +9,10 @@ values just fall back to sensible defaults / auto-discovery.
 from __future__ import annotations
 
 import os
+import stat
 import threading
 import tomllib
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +81,37 @@ bridge_ip = "192.168.1.99"
 
 _lock = threading.Lock()
 _cache: dict[str, Any] | None = None
+PRIVATE_FILE_MODE = 0o600
+
+
+def prepare_private_file(path: Path) -> None:
+    """Create ``path`` privately, or warn if an existing file is exposed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags, PRIVATE_FILE_MODE)
+    try:
+        mode = stat.S_IMODE(os.fstat(fd).st_mode)
+    finally:
+        os.close(fd)
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        warnings.warn(
+            f"{path} has insecure permissions {mode:04o}; expected no group or other access",
+            RuntimeWarning,
+        )
+
+
+def write_private_text(path: Path, text: str) -> None:
+    """Write text, creating a missing file with mode no broader than 0600."""
+    prepare_private_file(path)
+    flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = -1
+            f.write(text)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _load() -> dict[str, Any]:
@@ -88,8 +121,12 @@ def _load() -> dict[str, Any]:
             return _cache
         if not CONFIG_PATH.exists():
             try:
-                CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-                CONFIG_PATH.write_text(_DEFAULT_TEMPLATE)
+                write_private_text(CONFIG_PATH, _DEFAULT_TEMPLATE)
+            except OSError:
+                pass
+        else:
+            try:
+                prepare_private_file(CONFIG_PATH)
             except OSError:
                 pass
         data: dict[str, Any] = {}
