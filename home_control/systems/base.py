@@ -150,8 +150,10 @@ class Popup:
     A System returns one from ``pending_popup()`` when it needs to interrupt the
     user (e.g. Sonos found a speaker not pinned in config). The shell draws it
     centered with an accent border and a "press ENTER to close" footer; ENTER
-    calls ``dismiss_popup()`` and other keys are swallowed, so the alert can't be
-    typed past by accident. ``color`` defaults to the system's accent when blank.
+    calls ``dismiss_popup()``, and when ``lines`` outgrow the screen the arrows
+    and PgUp/PgDn scroll them. Every other key is swallowed, so the alert can't
+    be typed past by accident. ``color`` defaults to the system's accent when
+    blank.
     """
 
     title: str

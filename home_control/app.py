@@ -93,6 +93,12 @@ class Shell:
         self.poller = Poller(systems)
         self.show_help = False
         self.voice = VoiceController(systems)
+        # Scroll state for a popup taller than the screen. pending_popup()
+        # builds a fresh Popup every frame, so the offset belongs to the
+        # (system, title) it was scrolled on and restarts when that changes.
+        self._popup_ident: tuple[System, str] | None = None
+        self._popup_scroll = 0
+        self._popup_page = 1  # body rows the last render had room for
 
     # -- focus ----------------------------------------------------------------
     def cycle_focus(self, delta: int) -> None:
@@ -109,6 +115,8 @@ class Shell:
         slots = layout.compute_layout(collapsed_heights, self.focused, h)
 
         popup_sys = self._popup_system()
+        if popup_sys is None:
+            self._popup_ident = None
         overlaid = self.show_help or popup_sys is not None or self.voice.active()
 
         focused_slot = slots[0]
@@ -190,16 +198,37 @@ class Shell:
             return
         bw = min(HELP_WIDTH, w - 10)
         inner = bw - 4
-        rows = ["", *popup.lines]  # blank line buffer below the title border
-        footer = "press ENTER to close"
-        bh = len(rows) + 4  # borders + blank separator + footer
+        body = popup.lines
+        # Borders, a blank line either side of the body, and the footer: five
+        # rows around it. The box stops growing a row short of each screen
+        # edge, and past that the body scrolls.
+        bh = min(len(body) + 5, max(6, h - 2))
+        page = bh - 5
+        ident = (system, popup.title)
+        if ident != self._popup_ident:
+            self._popup_ident, self._popup_scroll = ident, 0
+        # Clamped every frame, not just on a keypress: a popup can change
+        # length while open (Midea's re-reads live attributes).
+        self._popup_scroll = max(0, min(self._popup_scroll, len(body) - page))
+        self._popup_page = page
+        first = self._popup_scroll
+        shown = body[first:first + page]
+        if len(shown) < len(body):
+            footer = f"↑↓ scroll ({first + 1}-{first + len(shown)} of {len(body)})   ENTER to close"
+        else:
+            footer = "press ENTER to close"
         top = max(0, (h - bh) // 2)
         left = max(0, (w - bw) // 2)
         color = popup.color or system.color
         region = draw_box(stdscr, top, left, bh, bw, popup.title, color, focused=True)
-        for i, text in enumerate(rows):
-            region.text(i, 0, text[:inner])
-        region.text(len(rows) + 1, max(0, (inner - len(footer)) // 2), footer, dim=True)
+        for i, text in enumerate(shown):
+            region.text(i + 1, 0, text[:inner])
+        region.text(page + 2, max(0, (inner - len(footer)) // 2), footer, dim=True)
+
+    def _scroll_popup(self, system: System, delta: int) -> None:
+        popup = system.pending_popup()
+        total = len(popup.lines) if popup is not None else 0
+        self._popup_scroll = max(0, min(self._popup_scroll + delta, total - self._popup_page))
 
     def _render_voice(self, stdscr: curses.window, h: int, w: int) -> None:
         mode, buffer, message, _is_error = self.voice.snapshot()
@@ -263,10 +292,19 @@ class Shell:
             self.voice.feed_key(key)
             return False
 
-        popup_sys = self._popup_system()  # modal alert: ENTER dismisses; other keys ignored
+        popup_sys = self._popup_system()  # modal alert: ENTER dismisses, arrows scroll, other keys ignored
         if popup_sys is not None:
             if key in (ord("\n"), curses.KEY_ENTER):
                 popup_sys.dismiss_popup()
+                self._popup_ident = None
+            elif key == curses.KEY_UP:
+                self._scroll_popup(popup_sys, -1)
+            elif key == curses.KEY_DOWN:
+                self._scroll_popup(popup_sys, 1)
+            elif key == curses.KEY_PPAGE:
+                self._scroll_popup(popup_sys, -self._popup_page)
+            elif key == curses.KEY_NPAGE:
+                self._scroll_popup(popup_sys, self._popup_page)
             return False
 
         if self.show_help:  # any key dismisses help; nothing else happens

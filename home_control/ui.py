@@ -48,7 +48,9 @@ from dataclasses import dataclass
 #   reads as itself while the popup is the only thing at full strength. Panels
 #   do nothing to opt in: the substitution happens in attr(), which every draw
 #   already goes through. Draw a popup *outside* the backdrop() block or it
-#   dims with its backdrop.
+#   dims with its backdrop. A modal popup taller than the screen stops a row
+#   short of each edge and scrolls (↑↓, PgUp/PgDn); its footer then says so
+#   and gives the visible range, "↑↓ scroll (1-30 of 44)".
 #
 # Badges. Every panel leads its collapsed line and expanded header with a
 #   "● LABEL" badge, coloured by badge_color(state, accent): BADGE_ACTIVE ->

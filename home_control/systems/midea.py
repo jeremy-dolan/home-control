@@ -317,11 +317,11 @@ def _fmt_temp(c: float | None, fahrenheit: bool) -> str:
 # ---------------------------------------------------------------------------
 # Device info (the `i` popup)
 #
-# Popups are plain unstyled text clipped to HELP_WIDTH, and the shell centres
-# them without scrolling, so this view has to fit the 45-row floor the project
-# designs for. Two columns of INFO_COL keep the whole of midea-local's
-# attribute dict inside ~30 lines; capabilities are wrapped name lists rather
-# than one flag per line for the same reason.
+# Popups are plain unstyled text clipped to HELP_WIDTH; the shell scrolls one
+# that outgrows the screen. Two columns of INFO_COL keep midea-local's whole
+# attribute dict to as few lines as possible, so most of it reads at a glance,
+# and capabilities are wrapped name lists rather than one flag per line for the
+# same reason.
 # ---------------------------------------------------------------------------
 
 INFO_COL = 33
