@@ -45,6 +45,28 @@ device-info overlay someday — Roku has none, Sonos and Hue both do:
 `uptime`, and the timezone block (`time-zone`, `clock-format`,
 `time-zone-offset`).
 
+## Hue: a bridge that answers with an error isn't unreachable
+
+Since phue2 0.1, `Bridge.request` raises `PhueAPIError` when the bridge answers
+with a Hue error object — proof the bridge is up. `HueController.poll()` still
+treats every exception from `_fetch_state` as unreachability: it drops the
+handle and calls `reach.failed()`, so after the grace period the panel says the
+bridge is unreachable. The likely real case is a revoked app key (Hue error 1,
+"unauthorized user"), and rebuilding the handle can't recover from it: with a
+username cached in `~/.python_hue`, `Bridge()` never re-registers. Catch
+`PhueAPIError` separately — report it through `error` rather than `reach` — and
+on error 1 offer re-pairing (forget the cached username, prompt for the link
+button).
+
+## Hue: reuse one HTTP connection
+
+phue2 0.1 accepts `Bridge(http_client=httpx.Client(...))`; without it every
+request opens a fresh client and TCP connection — two per poll tick, every
+second while the panel is focused. The client is caller-owned, so its timeout
+replaces `Bridge(timeout=CONNECT_TIMEOUT)`, and it should live on the
+controller, not the handle `poll()` drops and rebuilds on failure. Confirm it's
+safe to share between the poll thread and main-thread commands.
+
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
 for in-app help vs. README.md

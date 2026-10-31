@@ -203,6 +203,27 @@ def test_hue_tracks_whether_the_bridge_ip_is_configured(monkeypatch):
     assert hue.HueController("10.0.0.6").ip_configured is True
 
 
+def test_hue_rejected_command_leaves_cache_untouched():
+    """phue2 raises PhueAPIError when the bridge answers with an error object;
+    the command reports failure and the cache keeps the light's real state."""
+    import phue
+
+    class RejectingBridge:
+        def set_light(self, lid, key, value=None):
+            raise phue.PhueAPIError(6, "parameter, xy, not available", [])
+
+    ctl = hue.HueController("192.0.2.1")
+    ctl._bridge = RejectingBridge()
+    ctl.reach.succeeded()
+    ctl.lights = {1: hue.Light(id=1, name="Lamp", on=True, brightness=254, reachable=True,
+                               colormode="ct", colortemp=366, xy=[0.4, 0.4])}
+
+    xy_mode = hue.EditableField("colormode", "colormode", "xy")
+    ctl.apply_light_edit(1, xy_mode, [xy_mode])
+    assert ctl.lights[1].colormode == "ct"
+    assert "not available" in ctl.error
+
+
 def test_hue_clock_sync_pushes_host_time(monkeypatch):
     # The mock config's fixed 2026-07-21 clock is always well past
     # CLOCK_DRIFT_WARN from "now", so the drift path is live under mock.
