@@ -93,6 +93,19 @@ def prepare_private_file(path: Path) -> None:
         mode = stat.S_IMODE(os.fstat(fd).st_mode)
     finally:
         os.close(fd)
+    _warn_if_exposed(path, mode)
+
+
+def check_private_file(path: Path) -> None:
+    """Warn if an existing ``path`` is exposed; a missing one stays missing."""
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return
+    _warn_if_exposed(path, mode)
+
+
+def _warn_if_exposed(path: Path, mode: int) -> None:
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
         warnings.warn(
             f"{path} has insecure permissions {mode:04o}; expected no group or other access",
