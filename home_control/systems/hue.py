@@ -604,11 +604,12 @@ class HueController:
                     ls.effect = fld.value
             return
         if fld.api_key == "colormode":
+            ok = True
             if fld.value == "ct" and ls and ls.colortemp is not None:
-                self._set_light(lid, "ct", ls.colortemp)
+                ok = self._set_light(lid, "ct", ls.colortemp)
             elif fld.value == "xy" and ls and ls.xy is not None:
-                self._set_light(lid, "xy", ls.xy)
-            if ls:
+                ok = self._set_light(lid, "xy", ls.xy)
+            if ok and ls:
                 with self._lock:
                     ls.colormode = fld.value
             return
