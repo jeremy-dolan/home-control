@@ -20,7 +20,8 @@ dependencies = [
     "anthropic>=0.100",
     # Midea AC: local-LAN control via midea-local (import name `midealocal`),
     # the extracted core of the Home Assistant midea_ac_lan integration.
-    "midea-local>=6.10.0",
+    # Capped at the last major verified on real units; see TODO.md.
+    "midea-local>=6.10.0,<7",
     # midea-local imports typing_extensions.deprecated but doesn't declare it.
     "typing_extensions>=4",
 ]

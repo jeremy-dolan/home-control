@@ -83,6 +83,29 @@ def test_setup_logging_warns_without_changing_permissions(tmp_path, monkeypatch)
     assert stat.S_IMODE(log.stat().st_mode) == 0o666
 
 
+def test_setup_logging_creates_no_file_until_first_write(tmp_path, monkeypatch):
+    log_path = tmp_path / "cache" / "tui.log"
+    monkeypatch.setattr(app, "LOG_PATH", log_path)
+
+    log = app._setup_logging()
+    assert not log_path.exists()
+
+    log.write("boom\n")
+    log.write("again\n")
+    assert log_path.read_text() == "boom\nagain\n"
+    assert stat.S_IMODE(log_path.stat().st_mode) == config.PRIVATE_FILE_MODE
+    log.close()
+
+
+def test_lazy_log_drops_writes_it_cannot_open(tmp_path):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("")
+    log = app._LazyLog(blocker / "tui.log")
+
+    assert log.write("lost\n") == 5
+    assert not (blocker / "tui.log").exists()
+
+
 def test_short_popup_is_unchanged(shell):
     alert = _Alert(5)
     rows = _draw(shell(alert), alert)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import curses
+import io
 import logging
 import os
 import sys
 import textwrap
+import threading
 from pathlib import Path
+from typing import TextIO
 
 from . import config, layout
 from .poller import Poller
@@ -49,24 +52,70 @@ LOG_PATH = Path(
 )
 
 
-def _setup_logging() -> None:
-    """Send all logging to a file, never stderr.
+class _LazyLog(io.TextIOBase):
+    """Append-only text stream that creates its file (0600) on first write.
+
+    A run with nothing to report leaves no file behind. If the file can't be
+    opened, writes are dropped: this stream stands in for stderr, so there is
+    nowhere safe to report the failure.
+    """
+
+    def __init__(self, path: Path):
+        self._path = path
+        self._file: TextIO | None = None
+        self._failed = False
+        self._lock = threading.Lock()
+
+    def writable(self) -> bool:
+        return True
+
+    def _open(self) -> TextIO | None:
+        with self._lock:
+            if self._file is None and not self._failed:
+                try:
+                    self._path.parent.mkdir(parents=True, exist_ok=True)
+                    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+                    fd = os.open(self._path, flags, config.PRIVATE_FILE_MODE)
+                    self._file = os.fdopen(fd, "a", encoding="utf-8", errors="backslashreplace")
+                except OSError:
+                    self._failed = True
+            return self._file
+
+    def write(self, s: str) -> int:
+        f = self._file or self._open()
+        if f is not None:
+            try:
+                f.write(s)
+                f.flush()
+            except OSError:
+                pass
+        return len(s)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._file is not None:
+                self._file.close()
+                self._file = None
+        super().close()
+
+
+def _setup_logging() -> _LazyLog:
+    """Send all logging to a file, never stderr; return that file's stream.
 
     Libraries like soco/midealocal call ``logger.exception()`` on network errors,
     which would otherwise dump tracebacks straight onto the curses screen and
     corrupt it. Routing the root logger to a file keeps the TUI clean and still
     captures errors for debugging.
     """
-    try:
-        config.prepare_private_file(LOG_PATH)
-        logging.basicConfig(
-            filename=str(LOG_PATH), filemode="a", level=logging.WARNING,
-            format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        )
-    except OSError:
-        return
+    config.check_private_file(LOG_PATH)
+    log = _LazyLog(LOG_PATH)
+    logging.basicConfig(
+        stream=log, level=logging.WARNING,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
     for name in ("phue_modern", "httpx", "httpcore", "soco", "midealocal"):
         logging.getLogger(name).setLevel(logging.ERROR)
+    return log
 
 
 def _wrap_message(text: str, width: int, max_lines: int) -> list[str]:
@@ -362,22 +411,17 @@ def main_loop(stdscr: curses.window, shell: Shell) -> None:
 
 
 def run() -> None:
-    _setup_logging()
+    log = _setup_logging()
     shell = Shell(build_systems())
     # Redirect stderr to the log file for the curses session so stray tracebacks
     # or library prints can't corrupt the screen. Restored before any crash
     # traceback is shown (curses.wrapper has already restored the terminal).
     old_stderr = sys.stderr
+    sys.stderr = log
     try:
-        config.prepare_private_file(LOG_PATH)
-        with open(LOG_PATH, "a") as log:
-            sys.stderr = log
-            try:
-                curses.wrapper(main_loop, shell)
-            finally:
-                sys.stderr = old_stderr
-    except OSError:
         curses.wrapper(main_loop, shell)
+    finally:
+        sys.stderr = old_stderr
 
 
 if __name__ == "__main__":

@@ -47,6 +47,59 @@ Some places Claude fell short:
   recourse to some basic engineering judgment might get stuck down some very
   bad paths.
 
+## Install
+
+Requires Python 3.12 or newer. The install is editable, so changes to the clone
+(say, a device added with /add-device) take effect without reinstalling.
+
+```bash
+git clone https://github.com/jeremy-dolan/home-control
+cd home-control
+python3 -m venv .venv
+.venv/bin/pip install -e .
+ln -s "$PWD/.venv/bin/home-control" ~/.local/bin/  # or somewhere in your $PATH
+```
+
+Then:
+
+```bash
+# demo mode, using canned device data (no hardware access):
+ANTHROPIC_API_KEY="" HOME_CONTROL_MOCK=1 home-control
+
+# real use:
+home-control
+
+# update, inside your home-control directory:
+git pull
+.venv/bin/pip install -e .  # picks up any dependency changes
+```
+
+### Config
+
+The first run writes a commented
+[config template](home_control/config.example.toml) to
+`~/.config/home-control/config.toml`. Most supported devices need no config:
+the router, Roku, Sonos speakers and Midea units are discovered on the LAN at
+startup, and their config entries mostly pin IPs to skip discovery and start
+faster (discovered devices are not written to the config currently). What does
+need setting:
+
+- **Hue** isn't discovered: set `[hue] bridge_ip` (the template's
+  `192.168.1.99` is a placeholder). Press the bridge's link button when the
+  panel asks; the credential is then cached in `~/.python_hue`.
+- **Midea** V3 units need your Midea account in `[midea]` once, to fetch each
+  unit's key; keys are cached in `~/.cache/home-control/midea_tokens.json`.
+- **Router**: a `[router] password` unlocks the full device list (Fios only).
+- **Voice control** (SPACE) needs an Anthropic API key, from
+  `ANTHROPIC_API_KEY` or `[voice] api_key`.
+
+Per-device details are under Device support below.
+
+### Development
+
+`.venv/bin/pip install -e ".[dev]"` adds the lint, type-check and test tools;
+see `ARCHITECTURE.md` for the commands.
+
 ## Device support
 
 If you want to use this, you can probably ask Claude to wire in whatever

@@ -71,12 +71,11 @@ def test_config_warns_about_existing_permissions_without_changing_them(tmp_path,
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o666
 
 
-def test_default_template_matches_example_file():
-    """`config._DEFAULT_TEMPLATE` is what a fresh install gets written; the
-    repo's config.example.toml is what users read. CLAUDE.md calls out that
-    they must stay byte-identical and that nothing enforced it — this does."""
-    example = Path(__file__).resolve().parent.parent / "config.example.toml"
-    assert config._DEFAULT_TEMPLATE == example.read_text(), (
-        "config.example.toml and config._DEFAULT_TEMPLATE have diverged — "
-        "edit both, they must match byte for byte"
-    )
+def test_autocreated_config_is_the_example_file(tmp_path, monkeypatch):
+    """A fresh install gets exactly the config.example.toml users browse."""
+    cfg = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(config, "_cache", None)
+    config.get("hue", "bridge_ip")
+    example = Path(config.__file__).with_name(config.TEMPLATE_NAME)
+    assert cfg.read_bytes() == example.read_bytes()
