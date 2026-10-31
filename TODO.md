@@ -67,6 +67,31 @@ replaces `Bridge(timeout=CONNECT_TIMEOUT)`, and it should live on the
 controller, not the handle `poll()` drops and rebuilds on failure. Confirm it's
 safe to share between the poll thread and main-thread commands.
 
+## Midea: port to current midea-local
+
+`pyproject.toml` caps midea-local below 7 (a3d5866): a fresh install had
+resolved 15.0.0, which breaks the Midea code. 6.11.1 is the version verified on
+real units; 7 through 14 are untested, so first find which major broke us. The
+two 15.0 changes found so far (the commit message has the detail):
+
+- `dev.capabilities` is gone. `midea.py` reads it in `_caps_ready`,
+  `_unit_from_device` and `device_info`. 6.11's property just returns
+  `self._capabilities`, which 15.0 keeps, so reading that works on both — or
+  find 15's public replacement, if there is one. The suite's fake device still
+  has `.capabilities`, which is why the tests never caught it.
+- `dev.attributes` hides `screen_display`, `indoor_humidity`, the swing angles,
+  `anion`, `rate_select` and `sound` until the unit's B5 reply reports the
+  matching capability. A unit with a display that doesn't claim
+  `display_control` would lose its display chip. The A0 push replay tests need
+  a B5 frame first; the real ones are in
+  `~/midea-samples/frames-display-off-2026-08-02.txt` (t=4.5 and 4.6), and
+  that unit does report `display_control`.
+
+The captured C0/A0 frames parse identically on 6.11 and 15.0, and the A0 push
+still clobbers `screen_display`, so `_ignore_push_padding` stays. Connecting,
+cloud pairing, commands and whatever else changed across nine majors can only
+be checked against the units — all three, since capabilities vary per unit.
+
 ## add tests/CI for docs sync
 we've added a test to ensure example config doesn't drift, but still need one
 for in-app help vs. README.md
