@@ -150,7 +150,7 @@ service integration, and EQ editing aren't ported yet.)
 
 Config: `[sonos] speakers` pins speakers by IP — each entry is
 `{ ip = "...", name = "..." }` — to skip the ~2s SSDP discovery and connect
-instantly. The list order is the display order, top to bottom, and the optional
+instantly. Devices will be displayed in the order listed, and the optional
 `name` overrides the speaker's own room name. If additional speakers are
 broadcast within the same system as the pinned speakers, a popup will alert the
 user about additional devices being available. If nothing is pinned in the
@@ -178,7 +178,8 @@ lag. Units are auto-discovered by LAN broadcast.
 `i` opens device info for the selected unit: every attribute and capability the
 protocol exposes, including fields the panel never renders (humidity, energy
 counters, runtime totals). The regular poll asks only for live status, so
-pressing `i` is what queries the unit for the rest.
+pressing `i` is what queries the unit for the rest; values fill in as replies
+land.
 
 Config `[midea]`: `units` pins units by IP, allowing us to skip the
 broadcast-discovery scan and display the devices instantly. Also allows

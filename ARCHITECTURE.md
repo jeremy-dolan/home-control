@@ -97,7 +97,8 @@ other permission bits are present.
 
 **Docs sync**: per-device implementation/config blurbs are mirrored in two
 places — `README.md`'s `## Device support` and each system's `help_notes()`
-(the in-app `?` help).
+(the in-app `?` help). `tests/test_docs_sync.py` checks that every help
+paragraph appears verbatim in the panel's README section.
 
 ## Testing
 
