@@ -47,6 +47,57 @@ Some places Claude fell short:
   recourse to some basic engineering judgment might get stuck down some very
   bad paths.
 
+## Install
+
+Requires Python 3.12 or newer.
+
+```bash
+pipx install git+https://github.com/jeremy-dolan/home-control
+# or
+uv tool install git+https://github.com/jeremy-dolan/home-control
+```
+
+### Demo
+
+Demo mode, using canned device data (no hardware access):
+
+```bash
+ANTHROPIC_API_KEY="" HOME_CONTROL_MOCK=1 home-control
+```
+
+### Real use
+
+Run `home-control`. The first run writes a commented config template
+to `~/.config/home-control/config.toml` (override with `$HOME_CONTROL_CONFIG`).
+Most devices need no config: the router, Roku, Sonos speakers and Midea units
+are discovered on the LAN at startup, and their config entries mostly pin IPs
+to skip discovery and start faster. Discovered devices are never written back
+to the config. What does need setting:
+
+- **Hue** isn't discovered: set `[hue] bridge_ip` (the template's
+  `192.168.1.99` is a placeholder). Press the bridge's link button when the
+  panel asks; the credential is then cached in `~/.python_hue`.
+- **Midea** V3 units need your Midea account in `[midea]` once, to fetch each
+  unit's key; keys are cached in `~/.cache/home-control/midea_tokens.json`.
+- **Router**: a `[router] password` unlocks the full device list (Fios only).
+- **Voice control** (SPACE) needs an Anthropic API key, from
+  `ANTHROPIC_API_KEY` or `[voice] api_key`.
+
+Per-device details are under Device support below.
+
+To update, `pipx upgrade home-control` (or `uv tool upgrade home-control`).
+
+### Development
+
+```bash
+git clone https://github.com/jeremy-dolan/home-control
+cd home-control
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+```
+
+See `ARCHITECTURE.md` for the test, lint and type-check commands.
+
 ## Device support
 
 If you want to use this, you can probably ask Claude to wire in whatever
