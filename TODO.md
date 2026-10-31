@@ -392,16 +392,3 @@ building instead.
 On first run, or with a command line arg. Use existing discovery code
 interactively, populating ~/.config/home-control/config.toml with user
 confirmation.
-
-## Install directions
-
-These would make sense:
-
-python3 -m venv ~/.local/share/home-control/venv
-source ~/.local/share/home-control/venv/bin/activate
-pip install git+https://github.com/jeremy-dolan/home-control.git
-ln -s ~/.local/share/home-control/venv/bin/home-control \
-      ~/.local/bin/home-control
-
-however, probably should direct users to make an 'editable' install so it
-can be extended to their devices

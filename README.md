@@ -49,12 +49,15 @@ Some places Claude fell short:
 
 ## Install
 
-Requires Python 3.12 or newer.
+Requires Python 3.12 or newer. The install is editable, so changes to the clone
+(say, a device added with /add-device) take effect without reinstalling.
 
 ```bash
-pipx install git+https://github.com/jeremy-dolan/home-control
-# or
-uv tool install git+https://github.com/jeremy-dolan/home-control
+git clone https://github.com/jeremy-dolan/home-control
+cd home-control
+python3 -m venv .venv
+.venv/bin/pip install -e .
+ln -s "$PWD/.venv/bin/home-control" ~/.local/bin/  # or somewhere in your $PATH
 ```
 
 ### Demo
@@ -85,18 +88,12 @@ to the config. What does need setting:
 
 Per-device details are under Device support below.
 
-To update, `pipx upgrade home-control` (or `uv tool upgrade home-control`).
+To update, `git pull` in the clone.
 
 ### Development
 
-```bash
-git clone https://github.com/jeremy-dolan/home-control
-cd home-control
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-```
-
-See `ARCHITECTURE.md` for the test, lint and type-check commands.
+`.venv/bin/pip install -e ".[dev]"` adds the lint, type-check and test tools;
+see `ARCHITECTURE.md` for the commands.
 
 ## Device support
 
