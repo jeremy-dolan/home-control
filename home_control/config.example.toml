@@ -10,8 +10,8 @@
 bridge_ip = "192.168.1.99"
 
 [roku]
-# App will auto-discover Roku devices and connect to the first one found.
-# Setting an IP skips the ~3s SSDP sweep on startup and connects instantly.
+# Setting the IP skips the ~3s SSDP discovery sweep on startup and connects
+# instantly. Leave unset to auto-discover (connects to the first Roku found).
 # ip = "192.168.1.80"
 
 [sonos]
