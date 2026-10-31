@@ -52,7 +52,7 @@ LOG_PATH = Path(
 def _setup_logging() -> None:
     """Send all logging to a file, never stderr.
 
-    Libraries like phue2/soco call ``logger.exception()`` on network errors,
+    Libraries like soco/midealocal call ``logger.exception()`` on network errors,
     which would otherwise dump tracebacks straight onto the curses screen and
     corrupt it. Routing the root logger to a file keeps the TUI clean and still
     captures errors for debugging.

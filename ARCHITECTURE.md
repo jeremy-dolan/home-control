@@ -64,8 +64,7 @@ Systems are registered in display order (top to bottom) in `_DEFAULT_ORDER` in
 
 Logging: the root logger writes to a file (`$HOME_CONTROL_LOG`, default
 `~/.cache/home-control/tui.log`), never stderr — library `logger.exception()`
-calls (phue2/soco/midealocal on network errors) would corrupt the curses
-screen.
+calls (soco/midealocal on network errors) would corrupt the curses screen.
 
 ## UI conventions
 
