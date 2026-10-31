@@ -1346,7 +1346,7 @@ class MideaSystem(System):
             "account and password to your Midea app login, and cloud to "
             'match which app it belongs to ("nethome_plus" or "smarthome").',
             "i opens device info for the selected unit: every attribute and "
-            "capability the protocol exposes, including the fields the panel "
+            "capability the protocol exposes, including fields the panel "
             "never renders (humidity, energy counters, runtime totals). The "
             "regular poll asks only for live status, so pressing i is what "
             "queries the unit for the rest; values fill in as replies land.",
