@@ -92,11 +92,10 @@ still clobbers `screen_display`, so `_ignore_push_padding` stays. Connecting,
 cloud pairing, commands and whatever else changed across nine majors can only
 be checked against the units — all three, since capabilities vary per unit.
 
-## add tests/CI for docs sync
-we've added a test to ensure example config doesn't drift, but still need one
-for in-app help vs. README.md
+## setup CI on GH
 
-setup CI on GH
+Run pytest, ruff and pyright on push. The docs-sync test
+(`tests/test_docs_sync.py`) only catches drift if something runs it.
 
 ## have claude investigate linting issues
 I think we have a bunch of unrefered vars
