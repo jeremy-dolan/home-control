@@ -19,3 +19,6 @@ dist/
 # Prototype/scratch trees not part of the shipped package
 /standalone-apps/
 *.untracked
+
+# Demo screenshots: regenerable from the .ans frames (see assets/demo/README.md)
+/assets/demo/*/*.png

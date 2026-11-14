@@ -100,8 +100,15 @@ Run pytest, ruff and pyright on push. The docs-sync test
 ## have claude investigate linting issues
 I think we have a bunch of unrefered vars
 
-## add Roku to demo GIF
+## Record the demo GIF instead of building it
 
+**Priority:** low · **Scope:** `assets/demo/`
+
+`assets/demo.gif` is assembled from hand-made `.ans` frames (see
+`assets/demo/README.md`), which drift as the UI changes. Record a real session
+with asciinema/`cast` in `HOME_CONTROL_MOCK=1` instead, so it shows mock
+devices rather than the household's. Once that works, `assets/demo/tools/`
+can go; keep the old `demo-N/` folders as the archive.
 
 ## Keep grouped speakers' status in sync on the expanded panel
 

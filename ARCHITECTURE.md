@@ -84,6 +84,8 @@ the top of `ui.py`; read it before any UI change.
 - `tools/` — scripts run by hand, not imported and not shipped:
   `roku_query.py`, `ssdp_probe.py`, `mdns_probe.py` probe hardware (target
   as an argument); `slider-test.py` renders the fill-bars outside curses.
+- `assets/demo/` — sources for the README's `assets/demo.gif`: hand-made `.ans`
+  frames per iteration, and `tools/` scripts that derive frames from them.
 
 ## Config
 
