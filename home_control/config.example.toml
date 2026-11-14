@@ -10,17 +10,17 @@
 bridge_ip = "192.168.1.99"
 
 [roku]
-# App will auto-discover Roku devices and connect to the first one found.
-# Setting an IP skips the ~3s SSDP sweep on startup and connects instantly.
+# Setting the IP skips the ~3s SSDP discovery sweep on startup and connects
+# instantly. Leave unset to auto-discover (connects to the first Roku found).
 # ip = "192.168.1.80"
 
 [sonos]
 # Pin speakers by IP to skip SSDP discovery and connect instantly (discovery
-# otherwise adds a ~2s sweep at startup). The list order is the display order,
-# top to bottom. An optional "name" overrides the speaker's own Sonos room
-# name. If any speakers are pinned and more are found on the network, a popup
-# lists the unpinned ones so you can add them. Leave unset to auto-discover
-# every speaker on the LAN (listed alphabetically).
+# otherwise adds a ~2s sweep at startup). Devices will be displayed in the
+# order listed. An optional "name" overrides the speaker's own Sonos room name.
+# If any speakers are pinned and more are found on the network, a popup lists
+# the unpinned ones so you can add them. Leave unset to auto-discover every
+# speaker on the LAN (listed alphabetically).
 # speakers = [
 #   { ip = "192.168.1.60" },
 #   { ip = "192.168.1.61", name = "Kitchen" },
